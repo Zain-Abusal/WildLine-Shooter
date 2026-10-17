@@ -1,0 +1,31 @@
+{
+  "name": "wildline-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "test": "tsx --test tests/*.test.ts",
+    "preview": "vite preview --host 0.0.0.0",
+    "test:browser": "tsx tests/browser.mjs",
+    "multiplayer": "tsx server/index.ts",
+    "test:production": "node tests/production.mjs",
+    "test:scenarios": "tsx tests/scenarios.mjs",
+    "test:p2p": "tsx tests/p2p.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/ws": "^8.18.2",
+    "playwright": "^1.64.1",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.0"
+  },
+  "engines": {
+    "node": "^22.12.0 || >=24.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
+}

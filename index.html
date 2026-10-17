@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="theme-color" content="#101d20" />
+    <title>WILDLINE — Field test</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="world" aria-label="Wildline interactive game world"></canvas>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Wildline home"
+        ><span class="brandmark">W</span> WILDLINE<span class="build"
+          >ENGINE / 0.1</span
+        ></a
+      >
+      <div class="session">
+        <span class="live-dot"></span> FIELD TEST
+        <span class="separator">/</span>
+        <span id="multiplayer-status">SOLO EXPLORATION</span>
+      </div>
+      <button id="shop-open" class="online-button">
+        SHOP · <span id="coin-balance">0</span> ◇
+      </button>
+      <button id="locker-open" class="online-button">LOCKER</button>
+      <button
+        id="sound-toggle"
+        class="online-button"
+        aria-label="Mute sound"
+        aria-pressed="false"
+      >
+        SOUND ON
+      </button>
+      <button id="online" class="online-button">PARTY</button>
+      <button
+        id="perf"
+        class="perf-button"
+        aria-label="Toggle diagnostics"
+        aria-pressed="true"
+      >
+        PERF
+      </button>
+      <button
+        id="fullscreen"
+        class="icon-button"
+        aria-label="Fullscreen"
+        title="Fullscreen"
+      >
+        ⛶
+      </button>
+      <button id="pause" class="icon-button" aria-label="Pause game">Ⅱ</button>
+    </header>
+    <section class="mission">
+      <div class="location">
+        <span class="crosshair-icon">⌖</span
+        ><span id="coordinates">0000 E · 0000 N</span
+        ><span class="biome">THE LOWLANDS</span>
+      </div>
+    </section>
+    <div id="fps-corner"><span id="fps-small">60</span> FPS</div>
+    <aside class="telemetry">
+      <div class="panel-label"><span class="live-dot"></span> ENGINE LIVE</div>
+      <div class="metrics">
+        <div><strong id="fps">60</strong><span>FPS</span></div>
+        <div><strong id="entities">0</strong><span>ENTITIES</span></div>
+        <div><strong id="chunks">0</strong><span>CHUNKS</span></div>
+      </div>
+      <div class="frame">
+        <span>FRAME TIME</span><span id="frame-time">16.7 ms</span>
+      </div>
+      <canvas
+        id="graph"
+        width="220"
+        height="28"
+        aria-label="Frame time history"
+      ></canvas>
+      <div class="telemetry-foot">CANVAS 2D <span>POOLED RUNTIME</span></div>
+    </aside>
+    <aside class="map-panel" id="map-panel">
+      <button id="map-toggle" aria-label="Expand map" aria-expanded="false">
+        MAP ⤢
+      </button>
+      <div class="map-title">SECTOR MAP <span id="sector">0 : 0</span></div>
+      <canvas
+        id="minimap"
+        width="160"
+        height="160"
+        aria-label="Local sector map"
+      ></canvas>
+      <div class="map-caption">
+        <span class="live-dot"></span> YOU <span>↑ N</span>
+      </div>
+    </aside>
+    <div class="center-mark" aria-hidden="true"><span></span></div>
+    <div id="toast" role="status">
+      Explore, collect supplies, and clear the frontier.
+    </div>
+    <footer class="bottom-hud">
+      <div class="player-card">
+        <div class="avatar">↟</div>
+        <div class="player-info">
+          <div class="player-name"><b id="player-callsign">PLAYER</b> <span>LVL 01</span></div>
+          <div class="health-label">
+            <span>HEALTH</span><span id="health">100 / 100</span>
+          </div>
+          <div class="health-track"><div id="health-fill"></div></div>
+          <div class="shield-track" title="Stamina · hold Shift to sprint">
+            <div id="stamina-fill"></div>
+          </div>
+        </div>
+      </div>
+      <div class="loadout">
+        <button class="slot selected" data-weapon="0">
+          <span class="slot-number">1</span><span class="weapon-icon">╱</span
+          ><span>CARBINE</span><small>PRIMARY</small></button
+        ><button class="slot" data-weapon="1">
+          <span class="slot-number">2</span
+          ><span class="weapon-icon axe">⚒</span><span>AXE</span
+          ><small>CLOSE RANGE</small>
+        </button>
+        <div class="resource">
+          <span>◇</span><strong id="resources">0</strong><small>SUPPLIES</small>
+        </div>
+      </div>
+      <div class="help">
+        <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> MOVE</span
+        ><span
+          ><kbd>CLICK</kbd> ATTACK <kbd>E</kbd> COLLECT
+          <kbd>R</kbd> RELOAD</span
+        ><span><kbd>1</kbd><kbd>2</kbd> EQUIP <kbd>ESC</kbd> PAUSE</span>
+      </div>
+    </footer>
+    <div class="seed-bar" hidden aria-hidden="true">
+      <span>WORLD SEED</span>
+      <form id="seed-form">
+        <input
+          id="seed"
+          aria-label="World seed"
+          value="wildline"
+          maxlength="64"
+          spellcheck="false"
+        />
+        <label
+          >RELIEF
+          <select id="relief" aria-label="Terrain relief">
+            <option value="0">Flat</option>
+            <option value="1" selected>Rolling</option>
+            <option value="1.9">Alpine</option>
+          </select></label
+        >
+        <label
+          >FIGHTERS
+          <select id="enemy-density" aria-label="Enemy density">
+            <option value="0">Peaceful</option>
+            <option value="0.04" selected>Standard</option>
+            <option value="0.12">Intense</option>
+          </select></label
+        >
+        <button
+          aria-label="Generate world"
+          title="Apply seed and generation settings"
+        >
+          ↻
+        </button>
+        <button
+          type="button"
+          id="random-seed"
+          aria-label="Random seed"
+          title="Generate a new random seed"
+        >
+          ⚄
+        </button>
+      </form>
+      <span class="seed-status" id="elevation">ELEV 0 m</span>
+    </div>
+    <div id="spectate-bar" role="status" hidden>
+      <button id="spectate-prev" aria-label="Previous player">◀</button>
+      <div>
+        <small>SPECTATING</small><strong id="spectate-name">—</strong>
+      </div>
+      <button id="spectate-next" aria-label="Next player">▶</button>
+      <button id="spectate-leave">RESULTS</button>
+    </div>
+    <div id="respawn-banner" role="status" hidden>
+      ELIMINATED · RESPAWNING SHORTLY
+    </div>
+    <div id="touch-controls">
+      <div id="move-stick" class="joystick"><span></span></div>
+      <div id="aim-stick" class="joystick"><span></span></div>
+      <button id="reload-touch">RELOAD</button
+      ><button id="attack">ATTACK</button><button id="interact">COLLECT</button>
+    </div>
+    <div id="start-screen">
+      <div class="start-card">
+        <div class="eyebrow">YOUR NEXT ROUND STARTS HERE</div>
+        <h1>NEW DROP.<br /><span>NEW STORY.</span></h1>
+        <p>
+          Jump into Public or bring your Party. Bots fill empty places, so the
+          action is always ready.
+        </p>
+        <div class="start-actions">
+          <button id="play-public">PLAY PUBLIC ↗</button
+          ><button id="start-party">PARTY</button
+          ><button id="play-game" hidden>BOT PRACTICE</button>
+        </div>
+        <div class="start-hint">
+          30 combatants · Team battles · Bots keep the action going.
+        </div>
+      </div>
+    </div>
+    <a id="credits-link" href="/about.html" target="_blank" rel="noopener"
+      >CREDITS ↗</a
+    >
+    <div id="matchmaking-screen" hidden>
+      <div class="party-card matchmaking-card">
+        <div class="eyebrow">PUBLIC MATCH</div>
+        <h2>FINDING YOUR DROP<span class="matchmaking-dots">…</span></h2>
+        <p id="matchmaking-status" role="status">
+          Finding a match. Bots fill any empty slots.
+        </p>
+        <button id="cancel-matchmaking">CANCEL</button>
+      </div>
+    </div>
+    <div id="party-screen" hidden>
+      <div class="party-card">
+        <div class="party-heading">
+          <div>
+            <div class="eyebrow">PLAY TOGETHER</div>
+            <h2>YOUR PARTY</h2>
+          </div>
+          <button id="close-party" aria-label="Close party menu">×</button>
+        </div>
+        <div id="party-choices">
+          <p class="party-intro">How would you like to play?</p>
+          <button id="choose-create">
+            <strong>CREATE A PARTY ↗</strong
+            ><span>Your world. Invite friends or welcome everyone.</span>
+          </button>
+          <button id="choose-join">
+            <strong>JOIN A PARTY ↗</strong
+            ><span>Use a friend's code or find a public match.</span>
+          </button>
+          <p class="party-note">UP TO 30 PARTICIPANTS · HUMAN PLAYERS + BOTS</p>
+        </div>
+        <form id="multiplayer-form" class="multiplayer-form" hidden>
+          <button type="button" id="party-back">← BACK</button>
+          <div class="eyebrow" id="party-step">02 / SET UP YOUR PARTY</div>
+          <label
+            >CALLSIGN
+            <input
+              id="callsign"
+              aria-label="Callsign"
+              maxlength="16"
+              value="Pathfinder"
+              required
+          /></label>
+          <div id="party-create-fields" hidden>
+            <label
+              >VISIBILITY
+              <select id="party-visibility" aria-label="Party visibility">
+                <option value="private">Private · invite code</option>
+                <option value="public">Public · anyone can join</option>
+              </select></label
+            >
+            <fieldset id="private-rules">
+              <legend>PRIVATE MATCH RULES</legend>
+              <label
+                >GAME MODE<select id="game-mode">
+                  <option value="teams" selected>
+                    Team Battle · 15 v 15, last team standing
+                  </option>
+                  <option value="br">Battle Royale · solo, last one standing</option>
+                  <option value="ffa">
+                    Free-for-All · respawns, first to 15 eliminations
+                  </option>
+                  <option value="ctf">
+                    Capture the Flag · respawns, first to 3 captures
+                  </option>
+                </select></label
+              >
+              <label
+                ><input id="private-bots" type="checkbox" checked /> Fill empty
+                places with bots</label
+              >
+              <label
+                >BOT DIFFICULTY<select id="bot-difficulty">
+                  <option value="0.65">Relaxed</option>
+                  <option value="1" selected>Standard</option>
+                  <option value="1.35">Veteran</option>
+                </select></label
+              >
+              <p class="party-detail">
+                Bots off? Explore alone while waiting. Joining players take
+                opposing sides.
+              </p>
+              <label
+                ><input id="infinite-ammo" type="checkbox" /> Infinite
+                ammo</label
+              >
+              <div class="weapon-checks">
+                <label
+                  ><input
+                    type="checkbox"
+                    name="allowed-weapon"
+                    value="0"
+                    checked
+                  />
+                  Carbine</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="allowed-weapon"
+                    value="2"
+                    checked
+                  />
+                  Shotgun</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="allowed-weapon"
+                    value="3"
+                    checked
+                  />
+                  Sniper</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="allowed-weapon"
+                    value="4"
+                    checked
+                  />
+                  SMG</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="allowed-weapon"
+                    value="5"
+                    checked
+                  />
+                  Marksman</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="allowed-weapon"
+                    value="6"
+                    checked
+                  />
+                  Sidekick</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="allowed-weapon"
+                    value="7"
+                    checked
+                  />
+                  Vanguard</label
+                >
+              </div>
+            </fieldset>
+            <p class="party-detail">
+              15 vs 15. Friendly bots back you up; enemy bots keep the action
+              going. Human players replace bots as they join.
+            </p>
+            <button id="practice-game" type="button">
+              BOT PRACTICE · NO CONNECTION NEEDED
+            </button>
+            <button id="create-party" type="button">CREATE PARTY ↗</button>
+          </div>
+          <div id="party-join-fields" hidden>
+            <label
+              >PARTY CODE
+              <input
+                id="room"
+                aria-label="Party code"
+                maxlength="24"
+                pattern="[-a-zA-Z0-9_]+"
+                placeholder="Enter friend's code"
+            /></label>
+            <button id="join-room" type="submit">JOIN WITH CODE</button>
+            <div class="party-divider">NO CODE? EVERYONE'S WELCOME</div>
+            <button id="find-public" type="button">FIND PUBLIC MATCH ↗</button>
+            <p class="party-detail">
+              Meet other players. We'll find an open public match and fill empty
+              slots with bots.
+            </p>
+          </div>
+        </form>
+        <div id="party-connected" hidden>
+          <div class="party-code-row">
+            YOUR CODE <output id="party-code">—</output
+            ><button id="copy-party">COPY</button>
+          </div>
+          <div id="party-members">No party yet.</div>
+          <p class="party-detail">
+            Your teammates have blue health bars. Opponents have orange bars.
+            Bots are marked BOT. Friendly fire is off.
+          </p>
+          <button id="party-play" disabled>ENTER GAME ↗</button
+          ><button id="leave-party" hidden>LEAVE PARTY</button>
+        </div>
+        <p id="connection-status" role="status">
+          Choose Create or Join to get started.
+        </p>
+      </div>
+    </div>
+    <div id="match-hud">
+      <span>♟ <strong id="players-left">30</strong> ENEMIES LEFT</span
+      ><span>⌖ <strong id="kills-count">0</strong> KILLS</span
+      ><span id="storm-status">STORM · 00:25</span
+      ><span id="cover-status"></span>
+    </div>
+    <div id="ammo-panel" role="status" aria-label="Ammunition">
+      <span id="ammo-label">AMMO · MAG / RESERVE</span
+      ><strong id="ammo-count">24 / 72</strong>
+    </div>
+
+    <div
+      id="kill-feed"
+      aria-live="polite"
+      aria-label="Recent eliminations"
+    ></div>
+    <button id="leaderboard-open">LEADERBOARD</button>
+    <div id="leaderboard-screen" hidden>
+      <div class="party-card leaderboard-card">
+        <div class="party-heading">
+          <div>
+            <div class="eyebrow">THIS ROUND</div>
+            <h2>LEADERBOARD</h2>
+          </div>
+          <button id="leaderboard-close" aria-label="Close leaderboard">
+            ×
+          </button>
+        </div>
+        <div id="leaderboard-rows" class="board-grid">
+          <div class="board-side home" role="group" aria-label="Your team">
+            <h3 id="board-home-title">YOUR TEAM</h3>
+            <div id="board-home"></div>
+          </div>
+          <div class="board-score" role="status">
+            <small id="board-mode">TEAM BATTLE</small>
+            <strong
+              ><span id="board-home-score">0</span><i>–</i
+              ><span id="board-away-score">0</span></strong
+            >
+            <small id="board-score-label">ELIMINATIONS</small>
+          </div>
+          <div class="board-side away" role="group" aria-label="Enemy team">
+            <h3 id="board-away-title">ENEMY TEAM</h3>
+            <div id="board-away"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="shop-screen" hidden>
+      <div class="shop-card">
+        <div class="party-heading">
+          <div>
+            <div class="eyebrow" id="shop-eyebrow">
+              THE QUARTERMASTER / FIELD SUPPLY
+            </div>
+            <h2 id="shop-title">
+              MAKE IT YOURS<span class="shop-title-dot">.</span>
+            </h2>
+          </div>
+          <button id="shop-close" aria-label="Close shop">×</button>
+        </div>
+        <p id="shop-wallet"></p>
+        <p class="party-detail" id="shop-detail">
+          Earn 25 coins per elimination and 100 for a win. Loadout purchases
+          apply next match; looted guns are match-only.
+        </p>
+        <div class="shop-toolbar">
+          <div class="shop-tabs" role="group" aria-label="Shop category">
+            <button data-shop-filter="all" aria-pressed="true">
+              ALL ITEMS <span id="shop-count">12</span></button
+            ><button data-shop-filter="weapons" aria-pressed="false">
+              WEAPONS <span id="shop-count-weapons">6</span></button
+            ><button data-shop-filter="outfits" aria-pressed="false">
+              OUTFITS <span id="shop-count-outfits">6</span>
+            </button>
+          </div>
+          <span class="shop-collection">FRONTIER COLLECTION / 01</span>
+        </div>
+        <div id="shop-items"></div>
+        <p id="shop-empty" hidden></p>
+        <p id="shop-status" role="status"></p>
+        <p class="party-detail">
+          Saved on this device. Clearing browser storage removes progress.
+        </p>
+      </div>
+    </div>
+    <div id="result-screen" hidden>
+      <div class="result-card">
+        <canvas
+          id="victory-dance"
+          width="240"
+          height="200"
+          aria-label="Victory dance"
+          hidden
+        ></canvas>
+        <div class="eyebrow" id="result-label">MATCH COMPLETE</div>
+        <h2 id="result-title">ELIMINATED</h2>
+        <p id="result-stats"></p>
+        <p id="result-status" role="status"></p>
+        <button id="result-again">PLAY AGAIN</button
+        ><button id="result-home">BACK TO START</button>
+      </div>
+    </div>
+    <div id="pause-screen" hidden>
+      <div class="pause-card">
+        <div class="eyebrow">TAKE A BREATHER</div>
+        <h2>Frontier on hold.</h2>
+        <p id="pause-copy">Your wilderness will be right here.</p>
+        <button id="resume">BACK TO THE FIELD ↗</button
+        ><button id="restart">RESTART EXPEDITION</button
+        ><button id="back-to-lobby">BACK TO START</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

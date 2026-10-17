@@ -1,0 +1,9 @@
+# Render Blueprint for the persistent WebSocket server (client stays on Vercel).
+# After the first deploy, set VITE_MULTIPLAYER_URL=wss://<service>.onrender.com in Vercel and redeploy.
+services:
+  - type: web
+    name: wildline-multiplayer
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    autoDeploy: true
