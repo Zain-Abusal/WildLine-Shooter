@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Chunk, World, seedHash, simplex, CHUNK } from "../src/world";
+import { Chunk, World, seedHash, simplex, CHUNK, terrainHeight } from "../src/world";
 import { Pool, Player } from "../src/entities";
 
 test("same text seed and coordinates reproduce heights, objects and drops", () => {
@@ -55,18 +55,20 @@ test("damage survives eviction and seed reset restores the pristine world", () =
   const w = new World("edit");
   w.sync(0, 0, 1000, 700);
   const c = w.chunks.find((c) => c.active && c.x === 0 && c.y === 0)!;
-  w.damage(c, 5, 99);
-  assert.equal(c.hp[5], 0);
+  const i = Array.from(c.hp).findIndex((hp) => hp > 0);
+  assert.ok(i >= 0, "chunk has a standing object");
+  w.damage(c, i, 99);
+  assert.equal(c.hp[i], 0);
   w.sync(100000, 100000, 1000, 700);
   w.sync(0, 0, 1000, 700);
   assert.equal(
-    w.chunks.find((c) => c.active && c.x === 0 && c.y === 0)!.hp[5],
+    w.chunks.find((c) => c.active && c.x === 0 && c.y === 0)!.hp[i],
     0,
   );
   w.reset("edit");
   w.sync(0, 0, 1000, 700);
   assert.ok(
-    w.chunks.find((c) => c.active && c.x === 0 && c.y === 0)!.hp[5] > 0,
+    w.chunks.find((c) => c.active && c.x === 0 && c.y === 0)!.hp[i] > 0,
   );
 });
 test("projectile/particle/entity pools saturate, recycle, and never expand", () => {
@@ -172,4 +174,23 @@ test("unchanged chunk bounds skip streaming scans and reset invalidates the cach
   w.sync(0, 0, 800, 600);
   assert.ok(calls > 0);
   assert.equal(w.activeCount, counts);
+});
+
+test("generated props keep their spacing, avoid water and stay inside their chunk", () => {
+  const c = new Chunk();
+  for (let cy = -4; cy <= 4; cy++)
+    for (let cx = -4; cx <= 4; cx++) {
+      c.generate(seedHash("spacing"), cx, cy, 1.9, 0.04);
+      for (let i = 0; i < c.count; i++) {
+        if (c.hp[i] <= 0 || c.kind[i] === 3) continue;
+        assert.ok(c.ox[i] >= cx * CHUNK && c.ox[i] < (cx + 1) * CHUNK);
+        assert.ok(
+          terrainHeight(seedHash("spacing"), c.ox[i], c.oy[i], 1.9) >= -0.24,
+          "nothing stands in water",
+        );
+        for (let j = 0; j < i; j++)
+          if (c.hp[j] > 0 && c.kind[j] !== 3 && c.kind[i] !== 5 && c.kind[j] !== 5)
+            assert.ok(Math.hypot(c.ox[i] - c.ox[j], c.oy[i] - c.oy[j]) >= 44);
+      }
+    }
 });

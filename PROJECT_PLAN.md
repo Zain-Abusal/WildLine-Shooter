@@ -153,3 +153,15 @@ Verified: npm test (32/32), npm run build, npm run test:browser, npm run test:sc
 - [ ] Host migration when the hosting player leaves; physical iPad/low-end laptop acceptance.
 
 Verified: npm test (39/39), npm run build, test:browser, test:scenarios, test:production and test:p2p all pass; HUD overlap audit clean at six viewports. Browser-hosted matches trust the host's device (no anti-cheat beyond the authority's own validation).
+
+## Host migration, cosmetics and world fixes — 2026-10-17
+
+- [x] Host migration for browser-hosted rooms: per-second authority backup to a successor, takeover with a listing token, resume tokens for every player, no world reset on resume (unit + two/three-browser tests).
+- [x] Idle backoff for signaling polls (free Redis quota).
+- [x] Distinct layered gunshot recipes per firearm; voice bank 6 noise + 6 tone voices.
+- [x] Shop/Locker kill effects and victory dances with local previews; equipped styles used in game and on wins.
+- [x] Finale: full-screen victory dance → top-3 podium → results (skippable); stronger kill VFX with camera shake; storm screen border.
+- [x] Supply caches became point gems (no healing); prop spacing/edge margins; soft biome contours; spawns avoid water/buildings; trail bridges over water.
+- [ ] Real cross-network migration testing (different networks/NATs) and physical devices.
+
+Verified: npm test (42/42), npm run build, test:browser, test:scenarios, test:production and test:p2p (including a real host-tab-close migration with a third player) pass.

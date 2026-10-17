@@ -3,6 +3,16 @@ import { chromium } from "playwright";
 import { createServer } from "vite";
 import { once } from "node:events";
 import { createGameServer } from "../server/index.ts";
+/** Finish the end-of-round finale (victory dance / podium) and land on the results screen. */
+async function toResults(page) {
+  for (let n = 0; n < 200; n++) {
+    if (await page.locator("#result-screen").isVisible()) return;
+    if (await page.locator("#finale-screen").isVisible())
+      await page.locator("#finale-skip").click();
+    await page.waitForTimeout(50);
+  }
+  throw new Error("Results screen never appeared");
+}
 /** Polls an async page callback until truthy; Playwright's waitForFunction does not await returned promises. */
 async function waitAsync(page, fn, arg, options = {}) {
   const end = Date.now() + (options.timeout ?? 20000);
@@ -163,9 +173,7 @@ try {
   room.edits.set("0,0,0", { x: 0, y: 0, i: 0, hp: 0 });
   await host.locator("#leaderboard-open").click();
   room.winner = 0;
-  await host.waitForFunction(
-    () => !document.getElementById("result-screen").hidden,
-  );
+  await toResults(host);
   assert.equal(await host.locator("#result-title").textContent(), "VICTORY");
   assert.ok(
     await host.locator("#leaderboard-screen").isHidden(),
@@ -285,7 +293,7 @@ try {
   await mobile.screenshot({ path: "artifacts/readable-start.png" });
   assert.ok(await mobile.locator("#credits-link").isVisible());
   await mobile.locator("#shop-open").tap();
-  assert.equal(await mobile.locator("#shop-items .shop-item").count(), 12);
+  assert.equal(await mobile.locator("#shop-items .shop-item").count(), 20);
   assert.ok(
     /STANDARD|RARE|EPIC/.test(
       await mobile.locator(".item-type").first().textContent(),
@@ -395,6 +403,7 @@ try {
   await spec.pg.locator("#spectate-next").click();
   await spec.pg.screenshot({ path: "artifacts/spectate.png" });
   await spec.pg.locator("#spectate-leave").click();
+  await toResults(spec.pg);
   assert.ok(await spec.pg.locator("#result-screen").isVisible());
   assert.equal(
     await spec.pg.locator("#result-title").textContent(),
@@ -404,7 +413,7 @@ try {
 
   assert.deepEqual(errors, []);
   console.log(
-    "PASS: capture the flag HUD/flags, free-for-all respawn, private spectating; legacy Public snapshots without Party flash, private solo entry/rematch, new map state, actual kill credit/rewards/feed, 30-slot leaderboard and backdrop close, distributed spawns, native cursor, private bot controls, axe hits, 12 unowned tagged shop items and creator credits.",
+    "PASS: capture the flag HUD/flags, free-for-all respawn, private spectating; legacy Public snapshots without Party flash, private solo entry/rematch, new map state, actual kill credit/rewards/feed, 30-slot leaderboard and backdrop close, distributed spawns, native cursor, private bot controls, axe hits, 20 unowned tagged shop items and creator credits.",
   );
 } finally {
   await browser?.close();

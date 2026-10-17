@@ -88,6 +88,7 @@ try {
   await until(host, "e.network.humanCount === 3");
   // The friend (first remote player) holds the backup; give them a kill to carry over.
   await until(friend, "e.network.successor", 8000);
+  await friend.waitForTimeout(1500); // a backup that already includes the buddy
   const friendId = await engineValue(friend, "e.network.id");
   const buddyId = await engineValue(buddy, "e.network.id");
 

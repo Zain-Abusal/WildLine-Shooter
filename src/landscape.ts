@@ -85,15 +85,18 @@ export class GroundCache {
             wy = chunk.y * CHUNK + Math.floor(j / CELLS) * TILE;
           const south = terrainHeight(seed, wx, wy + TILE, relief),
             east = terrainHeight(seed, wx + TILE, wy, relief);
+          // Soft, biome-tinted contour lines (were heavy dark terraces).
+          const biome = Math.floor(chunk.terrain[j] / LEVELS),
+            line = biome === 1 ? "#8fa6aa40" : biome === 2 ? "#9c7b5240" : "#354f3546";
           if (band > Math.floor(south * 7)) {
-            c.fillStyle = "#354f35aa";
-            c.fillRect(x, y + 12, 16, 4);
-            c.fillStyle = "#d7dfa37a";
-            c.fillRect(x, y + 11, 16, 1);
+            c.fillStyle = line;
+            c.fillRect(x, y + 14, 16, 2);
+            c.fillStyle = "#ffffff1c";
+            c.fillRect(x, y + 13, 16, 1);
           }
           if (band > Math.floor(east * 7)) {
-            c.fillStyle = "#354f3570";
-            c.fillRect(x + 13, y, 3, 16);
+            c.fillStyle = line;
+            c.fillRect(x + 14, y, 2, 16);
           }
         }
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Profile, tierFor } from "../src/profile";
+import { Profile, tierFor, KILL_EFFECTS, DANCES } from "../src/profile";
 import {
   WEAPONS,
   stormRadius,
@@ -100,4 +100,30 @@ test("games played drive the matchmaking bracket and persist", () => {
   assert.equal(again.tier, 1);
   assert.equal(tierFor(20), 2);
   assert.equal(tierFor(60), 3);
+});
+
+test("kill effects and victory dances unlock, equip, persist and never overdraw coins", () => {
+  const data = new Map<string, string>();
+  const storage = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => void data.set(k, v),
+  };
+  const p = new Profile(storage);
+  assert.equal(p.effect, 0);
+  assert.equal(p.dance, 0);
+  assert.equal(p.buyCosmetic("effect", 4), false, "cannot afford");
+  assert.equal(p.coins, 0);
+  p.reward(KILL_EFFECTS[2].cost + DANCES[3].cost, 0);
+  assert.ok(p.buyCosmetic("effect", 2));
+  assert.ok(p.buyCosmetic("dance", 3));
+  assert.equal(p.coins, 0);
+  assert.equal(p.buyCosmetic("dance", 99), false);
+  const again = new Profile(storage);
+  assert.equal(again.effect, 2);
+  assert.equal(again.dance, 3);
+  assert.ok(again.effects & (1 << 2));
+  data.set("wildline.profile.v1", JSON.stringify({ effect: 4, effects: 1, dance: -2 }));
+  const tampered = new Profile(storage);
+  assert.equal(tampered.effect, 0, "unowned equipped effect falls back");
+  assert.equal(tampered.dance, 0);
 });

@@ -7,6 +7,7 @@ import {
   STORM_END,
   FIREARM_IDS,
   WEAPONS,
+  MEDKIT_HEAL,
 } from "../src/combat";
 import { createGameServer } from "../server/index";
 import { Chunk, seedHash } from "../src/world";
@@ -746,13 +747,14 @@ test("battle royale starts everyone unarmed, spreads spawns, and chests drop gun
     send(a.ws, 4);
     await delay(60);
     const gun = r.loots.find((l) => l.gun);
-    assert.ok(gun && gun.ammo > 0, "chest drops a gun with ammo");
+    // The chest ammo may already be auto-collected (the player stands beside it).
+    assert.ok(gun && (gun.ammo > 0 || p.reserve > 0), "chest drops a gun with ammo");
     const med = r.loots.find((l) => l.heal > 0);
     if (med) {
       p.x = med.x;
       p.y = med.y;
       await delay(150);
-      assert.ok(p.health >= 90 || p.health === 100, "medkit heals on pickup");
+      assert.ok(p.health >= 40 + MEDKIT_HEAL - 1, "medkit heals its fixed points on pickup");
     }
     p.x = gun!.x;
     p.y = gun!.y;

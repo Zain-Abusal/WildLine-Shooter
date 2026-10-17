@@ -4,6 +4,16 @@ import { createServer } from "vite";
 import { createGameServer } from "../server/index.ts";
 import { once } from "node:events";
 import { mkdir } from "node:fs/promises";
+/** Finish the end-of-round finale (victory dance / podium) and land on the results screen. */
+async function toResults(page) {
+  for (let n = 0; n < 200; n++) {
+    if (await page.locator("#result-screen").isVisible()) return;
+    if (await page.locator("#finale-screen").isVisible())
+      await page.locator("#finale-skip").click();
+    await page.waitForTimeout(50);
+  }
+  throw new Error("Results screen never appeared");
+}
 /** Polls an async page callback until truthy; Playwright's waitForFunction does not await returned promises. */
 async function waitAsync(page, fn, arg, options = {}) {
   const end = Date.now() + (options.timeout ?? 20000);
@@ -352,6 +362,9 @@ try {
     e.player.health = 0;
     e.update(1 / 60);
   });
+  // Losses skip the dance: podium first, then results.
+  assert.ok(await page.locator("#finale-podium").isVisible());
+  await toResults(page);
   assert.ok(await page.locator("#result-screen").isVisible());
   assert.equal(await page.locator("#result-title").textContent(), "ELIMINATED");
   await page.screenshot({ path: "artifacts/loss.png" });
@@ -363,6 +376,14 @@ try {
     e.update(1 / 60);
   });
   assert.equal(await page.locator("#result-title").textContent(), "VICTORY");
+  // Win finale: dance stage → podium (top 3 with you) → results.
+  assert.ok(await page.locator("#finale-dance").isVisible());
+  assert.ok(await page.locator("#result-screen").isHidden(), "results wait for the dance");
+  await page.locator("#finale-skip").click();
+  assert.ok(await page.locator("#finale-podium").isVisible());
+  assert.ok((await page.locator(".podium").textContent()).includes("YOU"));
+  await page.screenshot({ path: "artifacts/podium.png" });
+  await toResults(page);
   await page.locator("#result-home").click();
   await page.evaluate(async () => {
     const e = (await import("/src/main.ts")).engine;
@@ -373,12 +394,14 @@ try {
   await page.waitForFunction(() => {
     const images = Array.from(document.querySelectorAll("#shop-items img"));
     return (
-      images.length === 12 &&
+      images.length === 20 &&
       images.every((img) => img.complete && img.naturalWidth > 0)
     );
   });
   // The shop sells only unowned items; counts match what is listed.
-  assert.equal(await page.locator("#shop-count").textContent(), "12");
+  assert.equal(await page.locator("#shop-count").textContent(), "20");
+  assert.equal(await page.locator("#shop-count-effects").textContent(), "4");
+  assert.equal(await page.locator("#shop-count-dances").textContent(), "4");
   await page.locator('[data-shop-filter="weapons"]').click();
   assert.equal(await page.locator("#shop-items .shop-item").count(), 6);
   assert.equal(await page.locator("#shop-count-weapons").textContent(), "6");
@@ -419,11 +442,12 @@ try {
 
   await page.locator("#shop-close").click();
   await page.locator("#locker-open").click();
-  assert.equal(await page.locator("#shop-items .shop-item").count(), 4);
-  assert.equal(await page.locator("#shop-count").textContent(), "4");
+  // Carbine, Ranger, shotgun, Azure + free Gold Burst effect and Victory Spin dance.
+  assert.equal(await page.locator("#shop-items .shop-item").count(), 6);
+  assert.equal(await page.locator("#shop-count").textContent(), "6");
   await page.locator("#shop-close").click();
   await page.locator("#shop-open").click();
-  assert.equal(await page.locator("#shop-items .shop-item").count(), 10);
+  assert.equal(await page.locator("#shop-items .shop-item").count(), 18);
   assert.equal(
     await page.locator(".shop-row").filter({ hasText: "BREACH SHOTGUN" }).count(),
     0,

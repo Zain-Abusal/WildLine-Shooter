@@ -3362,3 +3362,131 @@ body.spectating .help {
 #victory-dance[hidden] {
   display: none;
 }
+.shop-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* End-of-round finale: victory dance stage, then podium, then results. */
+#finale-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 14;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 40%, #1f4a35, #081d17 70%);
+  color: #eef6dc;
+  text-align: center;
+  padding: 16px;
+}
+#finale-screen[hidden],
+.finale-stage[hidden] {
+  display: none;
+}
+.finale-stage h2 {
+  font:
+    700 clamp(44px, 9vw, 84px) / 1 "Barlow Condensed",
+    sans-serif;
+  margin: 8px 0;
+  color: #d9f877;
+  letter-spacing: 2px;
+}
+#finale-canvas {
+  width: min(360px, 80vw);
+  height: auto;
+  aspect-ratio: 6 / 5;
+}
+#finale-sub {
+  color: #cfe0b8;
+  font-size: 15px;
+}
+.podium {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 26px;
+}
+.place {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(180px, 28vw);
+  animation: podium-rise 0.6s ease-out both;
+}
+.place.first {
+  animation-delay: 0.35s;
+}
+.place.third {
+  animation-delay: 0.15s;
+}
+.place[hidden] {
+  visibility: hidden;
+}
+.place i {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 3px solid #eef6dc;
+  margin-bottom: 8px;
+}
+.place b {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+.place span {
+  font-size: 12px;
+  color: #b8d27c;
+  margin: 4px 0 8px;
+}
+.place .step {
+  width: 100%;
+  display: grid;
+  place-items: center;
+  font:
+    700 40px/1 "Barlow Condensed",
+    sans-serif;
+  color: #10251d;
+  border-radius: 6px 6px 0 0;
+}
+.place.first .step {
+  height: 150px;
+  background: #ffd65a;
+}
+.place.second .step {
+  height: 110px;
+  background: #dfe7ea;
+}
+.place.third .step {
+  height: 80px;
+  background: #d7955b;
+}
+.place.you b {
+  color: #d9f877;
+}
+@keyframes podium-rise {
+  from {
+    opacity: 0;
+    transform: translateY(40px);
+  }
+}
+#finale-skip {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  min-height: 44px;
+  padding: 0 18px;
+  background: #10271f;
+  color: #eef6dc;
+  border: 1px solid #7d9463;
+  border-radius: 4px;
+  font-weight: 700;
+}
+@media (prefers-reduced-motion: reduce) {
+  .place {
+    animation: none;
+  }
+}

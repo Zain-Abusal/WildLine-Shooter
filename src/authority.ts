@@ -50,6 +50,7 @@ import {
   STRUCTURE,
   STRUCTURE_RADIUS,
   MEDKIT,
+  blockedSpot,
 } from "./world";
 
 type Actor = {
@@ -262,6 +263,8 @@ export function createAuthority(options: AuthorityOptions = {}) {
           : br
             ? Math.sin(brAngle) * brRadius
             : Math.sin(angle) * radius;
+      // Never spawn in water or inside a building.
+      if (blockedSpot(seed, x, y, r.relief, r.density, scratch)) continue;
       let clear = true;
       for (const other of r.players.values())
         if (
@@ -741,14 +744,11 @@ export function createAuthority(options: AuthorityOptions = {}) {
           }
       }
   }
-  /** Caches restore a little health; in battle royale they are loot chests. */
+  /** Caches are point pickups (no healing); in battle royale they are loot chests. */
   function openCache(room: Room, p: Actor, x: number, y: number, i: number) {
     edit(room, x, y, i, 0);
     p.supplies += scratch.drop[i] + 3;
-    if (room.mode !== "br") {
-      p.health = Math.min(100, p.health + 15);
-      return;
-    }
+    if (room.mode !== "br") return;
     const ox = scratch.ox[i],
       oy = scratch.oy[i],
       seed = seedHash(room.seed),

@@ -129,7 +129,7 @@
           ><small>CLOSE RANGE</small>
         </button>
         <div class="resource">
-          <span>◇</span><strong id="resources">0</strong><small>SUPPLIES</small>
+          <span>◇</span><strong id="resources">0</strong><small>POINTS</small>
         </div>
       </div>
       <div class="help">
@@ -482,11 +482,15 @@
         <div class="shop-toolbar">
           <div class="shop-tabs" role="group" aria-label="Shop category">
             <button data-shop-filter="all" aria-pressed="true">
-              ALL ITEMS <span id="shop-count">12</span></button
+              ALL ITEMS <span id="shop-count">20</span></button
             ><button data-shop-filter="weapons" aria-pressed="false">
               WEAPONS <span id="shop-count-weapons">6</span></button
             ><button data-shop-filter="outfits" aria-pressed="false">
-              OUTFITS <span id="shop-count-outfits">6</span>
+              OUTFITS <span id="shop-count-outfits">6</span></button
+            ><button data-shop-filter="effects" aria-pressed="false">
+              KILL FX <span id="shop-count-effects">4</span></button
+            ><button data-shop-filter="dances" aria-pressed="false">
+              DANCES <span id="shop-count-dances">4</span>
             </button>
           </div>
           <span class="shop-collection">FRONTIER COLLECTION / 01</span>
@@ -498,6 +502,23 @@
           Saved on this device. Clearing browser storage removes progress.
         </p>
       </div>
+    </div>
+    <div id="finale-screen" hidden>
+      <div id="finale-dance" class="finale-stage">
+        <canvas id="finale-canvas" width="360" height="300" aria-label="Victory dance"></canvas>
+        <h2>VICTORY</h2>
+        <p id="finale-sub"></p>
+      </div>
+      <div id="finale-podium" class="finale-stage" hidden>
+        <div class="eyebrow">THIS ROUND</div>
+        <h2>TOP PLAYERS</h2>
+        <div class="podium">
+          <div class="place second"><i></i><b></b><span></span><div class="step">2</div></div>
+          <div class="place first"><i></i><b></b><span></span><div class="step">1</div></div>
+          <div class="place third"><i></i><b></b><span></span><div class="step">3</div></div>
+        </div>
+      </div>
+      <button id="finale-skip" type="button">SKIP ›</button>
     </div>
     <div id="result-screen" hidden>
       <div class="result-card">

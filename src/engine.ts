@@ -13,6 +13,8 @@ import {
   STRUCTURE,
   STRUCTURE_RADIUS,
   MEDKIT,
+  blockedSpot,
+  Chunk,
 } from "./world";
 import { Player, Pool, movementSpeed } from "./entities";
 import { freshSeed, finiteValue } from "./session";
@@ -37,7 +39,14 @@ import {
   chestAmmo,
   stormEnd,
 } from "./combat";
-import { loadProfile, SKINS, SKIN_ASSETS, TIERS } from "./profile";
+import {
+  loadProfile,
+  SKINS,
+  SKIN_ASSETS,
+  TIERS,
+  KILL_EFFECTS,
+  DANCES,
+} from "./profile";
 import { Multiplayer } from "./network";
 import { playerName, randomPlayerName } from "./names";
 import {
@@ -167,17 +176,28 @@ export class GameEngine {
     return img;
   });
   private slotIcon = document.createElement("img");
+  /** Preallocated chunk for spawn checks (never touches the streamed world slots). */
+  private probe = new Chunk();
+  private campWet = false;
   /** Fixed kill-effect slots: position, age (seconds) and whether it was the player's kill. */
   private fxX = new Float64Array(8);
   private fxY = new Float64Array(8);
   private fxAge = new Float32Array(8).fill(99);
   private fxLocal = new Uint8Array(8);
+  /** Equipped kill effect style for the player's eliminations (KILL_EFFECTS index). */
+  private fxStyle = new Uint8Array(8);
   private fxCursor = 0;
   /** Victory dance: active flag, clock and chosen move (0 spin, 1 bounce, 2 wave). */
   private dancing = false;
   private danceClock = 0;
   private danceMove = 0;
   private danceCtx: CanvasRenderingContext2D | null = null;
+  private finaleCtx: CanvasRenderingContext2D | null = null;
+  /** End-of-round sequence: 0 off, 1 victory dance stage, 2 podium, then results. */
+  private finalePhase = 0;
+  private finaleClock = 0;
+  /** Seconds of camera shake left (local eliminations). */
+  private shake = 0;
   private frameDt = 0;
   private slotIconGun = -1;
   private samples = new Float32Array(80);
@@ -311,6 +331,7 @@ export class GameEngine {
       );
       this.notify(ours ? "Flag captured! +1 for your team." : "Your flag was captured.");
     };
+    $("finale-screen").addEventListener("click", () => this.advanceFinale(0, true));
     $("spectate-prev").addEventListener("click", () => this.cycleSpectate(-1));
     $("spectate-next").addEventListener("click", () => this.cycleSpectate(1));
     $("spectate-leave").addEventListener("click", () => this.finishMatch(false));
@@ -437,6 +458,13 @@ export class GameEngine {
         : "SOLO EXPLORATION";
     };
     this.network.onHostLost = () => void this.migrateHost();
+    this.network.onResumeFailed = () => {
+      // Not in the new host's backup: rejoin the same code as a fresh player.
+      const code = this.network.room;
+      this.network.disconnect(false);
+      this.notify("Rejoining the match on its new host…");
+      void this.connectPeer(code, false, false);
+    };
     this.network.onWelcome = (data) => {
       if ((data as { resumed?: boolean }).resumed) {
         // Same match, new host: keep the world, position and HUD as they are.
@@ -541,6 +569,8 @@ export class GameEngine {
       document.body.classList.remove("playing");
       $("start-screen").hidden = false;
       $("result-screen").hidden = true;
+    this.finalePhase = 0;
+    $("finale-screen").hidden = true;
       this.input.clear();
       this.setPaused(false);
       if (partyOpen) {
@@ -703,6 +733,7 @@ export class GameEngine {
       if (steps === 5) this.accumulator = 0;
     }
     this.frameDt = realDt;
+    if (this.finalePhase) this.advanceFinale(realDt);
     if (this.dancing) this.drawDance(realDt);
     if ((this.started && !this.paused) || this.renderDirty) {
       this.render(this.ctx);
@@ -919,12 +950,22 @@ export class GameEngine {
       w = this.world;
     for (let j = 0; j < e.capacity; j++) {
       const angle = (j / e.capacity + hash(w.seed, 91, 3)) * Math.PI * 2,
-        radius = this.brMode
+        variant = j % 3;
+      let radius = this.brMode
           ? 1500 + hash(w.seed, j, 71) * 4800
           : 800 + (j % 3) * 550 + hash(w.seed, j, 69) * 150,
         x = Math.cos(angle) * radius,
-        y = Math.sin(angle) * radius,
-        variant = j % 3;
+        y = Math.sin(angle) * radius;
+      // Step outward until the spot is dry land outside any building (seeded, order-independent).
+      for (
+        let step = 0;
+        step < 10 && blockedSpot(w.seed, x, y, w.relief, w.enemyDensity, this.probe);
+        step++
+      ) {
+        radius += 70;
+        x = Math.cos(angle) * radius;
+        y = Math.sin(angle) * radius;
+      }
       const n = e.spawn(
         x,
         y,
@@ -961,9 +1002,22 @@ export class GameEngine {
       this.alliesInitialized = true;
       for (let n = 0; n < 3; n++) {
         const angle = (n * Math.PI * 2) / 3;
+        let r = 360;
+        while (
+          r < 900 &&
+          blockedSpot(
+            this.world.seed,
+            p.x + Math.cos(angle) * r,
+            p.y + Math.sin(angle) * r,
+            this.world.relief,
+            this.world.enemyDensity,
+            this.probe,
+          )
+        )
+          r += 60;
         const k = a.spawn(
-          p.x + Math.cos(angle) * 360,
-          p.y + Math.sin(angle) * 360,
+          p.x + Math.cos(angle) * r,
+          p.y + Math.sin(angle) * r,
           0,
           0,
           100,
@@ -1439,7 +1493,7 @@ export class GameEngine {
             this.loot.spawn(c.ox[j] - 22, c.oy[j] + 26, chestAmmo(gun), 1, 1, gun);
             if (hash(w.seed, c.x * 64 + j, c.y * 64 + 997) < CHEST_MEDKIT_CHANCE)
               this.loot.spawn(c.ox[j] + 22, c.oy[j] + 26, 0, 2, 1, 0);
-          } else p.health = Math.min(100, p.health + 15);
+          }
           this.burst(c.ox[j], c.oy[j], 14, 1);
           this.sound.play(this.brMode ? Sfx.Chest : Sfx.Pickup);
           found = true;
@@ -1460,10 +1514,10 @@ export class GameEngine {
         found
           ? this.brMode
             ? "Chest opened. Grab the loot."
-            : "Supply cache collected. Health restored."
+            : "Points collected."
           : this.brMode
             ? "Move closer to a chest."
-            : "Move closer to a glowing supply cache.",
+            : "Move closer to a glowing point gem.",
       );
   }
   private collide(): void {
@@ -1538,6 +1592,11 @@ export class GameEngine {
     ctx.translate(this.width / 2, this.height / 2);
     ctx.scale(this.scale, this.scale);
     ctx.translate(-this.cameraX, -this.cameraY);
+    if (this.shake > 0) {
+      const k = this.shake * 40;
+      ctx.translate(Math.sin(this.matchTime * 91) * k, Math.cos(this.matchTime * 77) * k);
+      this.shake = Math.max(0, this.shake - this.frameDt);
+    }
     const w = this.world;
     for (let k = 0; k < w.capacity; k++) {
       const c = w.chunks[k];
@@ -1789,6 +1848,7 @@ export class GameEngine {
     const fx = this.particles;
     for (let n = 0; n < fx.capacity; n++)
       if (fx.active[n] && this.visible(fx.x[n], fx.y[n], 10)) {
+        const big = fx.kind[n] === 4;
         ctx.fillStyle =
           fx.kind[n] === 0
             ? "#bdd586"
@@ -1796,9 +1856,11 @@ export class GameEngine {
               ? "#eff6a1"
               : fx.kind[n] === 2
                 ? "#e69b76"
-                : "#b9c4b0";
+                : big
+                  ? KILL_EFFECTS[this.profile.effect].color
+                  : "#b9c4b0";
         ctx.globalAlpha = Math.min(1, fx.life[n] * 3);
-        ctx.fillRect(fx.x[n], fx.y[n], 3, 3);
+        ctx.fillRect(fx.x[n], fx.y[n], big ? 6 : 3, big ? 6 : 3);
       }
     ctx.globalAlpha = 1;
     if (this.muzzle > 0) {
@@ -1830,7 +1892,24 @@ export class GameEngine {
       ctx.lineTo(x + 3, y + 3);
       ctx.stroke();
     }
-    if (p.hurt > 0) {
+    const zone = this.network.connected
+        ? this.network.radius
+        : stormRadius(this.matchTime, this.brMode),
+      inStorm = this.started && Math.hypot(p.x, p.y) > zone && p.health > 0;
+    if (inStorm) {
+      // Storm exposure: a pulsing border in the storm's own colour.
+      ctx.save();
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      ctx.strokeStyle = "#9b5cf0";
+      ctx.globalAlpha = 0.45 + Math.sin(this.matchTime * 5) * 0.2;
+      ctx.lineWidth = 30;
+      ctx.strokeRect(15, 15, this.width - 30, this.height - 30);
+      ctx.strokeStyle = "#d9b8ff";
+      ctx.globalAlpha *= 0.6;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(33, 33, this.width - 66, this.height - 66);
+      ctx.restore();
+    } else if (p.hurt > 0) {
       ctx.save();
       ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       ctx.strokeStyle = "#ff6d57";
@@ -1987,9 +2066,8 @@ export class GameEngine {
     $("victory-dance").hidden = !won;
     this.dancing = won;
     this.danceClock = 0;
-    this.danceMove = crypto.getRandomValues(new Uint8Array(1))[0] % 3;
-    $("result-screen").hidden = false;
-    $("result-again").focus();
+    this.danceMove = this.profile.dance;
+    this.startFinale(won);
   }
   private openShop(locker: boolean): void {
     this.lockerMode = locker;
@@ -2019,6 +2097,8 @@ export class GameEngine {
     this.started = false;
     document.body.classList.remove("playing");
     $("result-screen").hidden = true;
+    this.finalePhase = 0;
+    $("finale-screen").hidden = true;
     $("start-screen").hidden = false;
     this.setOnlineControls(false);
     this.paused = true;
@@ -2040,6 +2120,8 @@ export class GameEngine {
     document.body.classList.remove("playing");
     this.input.clear();
     $("result-screen").hidden = true;
+    this.finalePhase = 0;
+    $("finale-screen").hidden = true;
     $("party-screen").hidden = true;
     $("shop-screen").hidden = true;
     $("leaderboard-screen").hidden = true;
@@ -2108,8 +2190,8 @@ export class GameEngine {
       this.drawLeaderboard();
     }
   }
-  private drawLeaderboard(): void {
-    // Cold/throttled UI work: stable scene storage remains untouched.
+  /** Round standings (cold path: leaderboard/podium), sorted by eliminations. */
+  private standings() {
     const entries = [
       {
         name: ($("callsign") as HTMLInputElement).value || "You",
@@ -2117,6 +2199,7 @@ export class GameEngine {
         team: true,
         alive: this.player.health > 0,
         you: true,
+        color: SKINS[this.outfit].color as string,
       },
     ];
     if (this.network.connected) {
@@ -2128,6 +2211,7 @@ export class GameEngine {
             team: this.network.ally(n),
             alive: this.network.peers.life[n] > 0,
             you: false,
+            color: (SKINS[this.network.outfits[n]] ?? SKINS[0]).color,
           });
     } else if (this.localBots) {
       for (let n = 0; n < this.enemySpawned; n++)
@@ -2137,6 +2221,7 @@ export class GameEngine {
           team: false,
           alive: !!this.enemies.active[n],
           you: false,
+          color: (SKINS[this.enemies.skin[n]] ?? SKINS[0]).color,
         });
       if (this.alliesInitialized)
         for (let n = 0; n < 3; n++)
@@ -2146,6 +2231,7 @@ export class GameEngine {
             team: true,
             alive: !!this.allies.active[n],
             you: false,
+            color: (SKINS[this.allies.skin[n]] ?? SKINS[0]).color,
           });
     }
     entries.sort(
@@ -2154,6 +2240,11 @@ export class GameEngine {
         Number(b.alive) - Number(a.alive) ||
         Number(b.you) - Number(a.you),
     );
+    return entries;
+  }
+  private drawLeaderboard(): void {
+    // Cold/throttled UI work: stable scene storage remains untouched.
+    const entries = this.standings();
     const mode = this.network.connected ? this.network.mode : this.practiceMode,
       solo = mode === "br" || mode === "ffa";
     let homeKills = 0,
@@ -2230,61 +2321,96 @@ export class GameEngine {
         ),
       );
     // The shop sells unowned items; the locker holds owned ones.
-    let weaponCount = 0,
-      outfitCount = 0;
-    for (const id of FIREARM_IDS)
-      if (!!(this.profile.owned & (1 << id)) === this.lockerMode) weaponCount++;
-    for (let id = 0; id < SKINS.length; id++)
-      if (!!(this.profile.skins & (1 << id)) === this.lockerMode)
-        outfitCount++;
-    $("shop-count").textContent = String(weaponCount + outfitCount);
-    $("shop-count-weapons").textContent = String(weaponCount);
-    $("shop-count-outfits").textContent = String(outfitCount);
-    const shown =
-      this.shopFilter === "weapons"
-        ? weaponCount
-        : this.shopFilter === "outfits"
-          ? outfitCount
-          : weaponCount + outfitCount;
+    // Kinds: 0 weapon, 1 outfit, 2 kill effect, 3 victory dance.
+    const pr = this.profile,
+      ownedMask = [pr.owned, pr.skins, pr.effects, pr.dances],
+      equippedId = [pr.weapon, pr.skin, pr.effect, pr.dance],
+      ids: number[][] = [
+        [...FIREARM_IDS],
+        SKINS.map((_, i) => i),
+        KILL_EFFECTS.map((_, i) => i),
+        DANCES.map((_, i) => i),
+      ],
+      filters = ["weapons", "outfits", "effects", "dances"],
+      counts = ids.map(
+        (list, kind) =>
+          list.filter((id) => !!(ownedMask[kind] & (1 << id)) === this.lockerMode).length,
+      );
+    $("shop-count").textContent = String(counts.reduce((a, b) => a + b, 0));
+    $("shop-count-weapons").textContent = String(counts[0]);
+    $("shop-count-outfits").textContent = String(counts[1]);
+    $("shop-count-effects").textContent = String(counts[2]);
+    $("shop-count-dances").textContent = String(counts[3]);
+    const filterKind = filters.indexOf(this.shopFilter),
+      shown = filterKind >= 0 ? counts[filterKind] : counts.reduce((a, b) => a + b, 0);
     $("shop-empty").hidden = shown > 0;
     $("shop-empty").textContent = this.lockerMode
       ? "Nothing here yet. Unlock items in the Shop."
       : "You own everything in this category. Equip it from your Locker.";
     const list = $("shop-items");
     list.replaceChildren();
-    const card = (id: number, gun: boolean) => {
-      const info = gun ? WEAPONS[id] : SKINS[id],
-        owned = !!((gun ? this.profile.owned : this.profile.skins) & (1 << id)),
-        equipped = (gun ? this.profile.weapon : this.profile.skin) === id;
+    const card = (id: number, kind: number) => {
+      const gun = kind === 0,
+        info =
+          kind === 0
+            ? WEAPONS[id]
+            : kind === 1
+              ? SKINS[id]
+              : kind === 2
+                ? KILL_EFFECTS[id]
+                : DANCES[id],
+        owned = !!(ownedMask[kind] & (1 << id)),
+        equipped = equippedId[kind] === id;
       if (owned !== this.lockerMode) return;
       const row = document.createElement("article");
       row.className = "shop-row shop-item" + (equipped ? " is-equipped" : "");
       row.style.setProperty(
         "--item-accent",
-        gun
+        kind === 0
           ? id === 0
             ? "#d9f877"
             : id === 2
               ? "#e5b67b"
               : "#8ed8e9"
-          : SKINS[id].color,
+          : kind === 1
+            ? SKINS[id].color
+            : kind === 2
+              ? KILL_EFFECTS[id].color
+              : "#d9f877",
       );
       const visual = document.createElement("div");
       visual.className = "item-visual";
       const tag = document.createElement("span");
       tag.className = "item-type";
-      tag.textContent = gun
-        ? WEAPON_RARITY[id] + " · " + WEAPON_TAGS[id]
-        : "COSMETIC · OUTFIT";
+      tag.textContent =
+        kind === 0
+          ? WEAPON_RARITY[id] + " · " + WEAPON_TAGS[id]
+          : kind === 1
+            ? "COSMETIC · OUTFIT"
+            : kind === 2
+              ? "COSMETIC · KILL EFFECT"
+              : "COSMETIC · VICTORY DANCE";
       const state = document.createElement("span");
       state.className = "item-state";
       state.textContent = equipped ? "✓ EQUIPPED" : owned ? "OWNED" : "UNLOCK";
       const img = document.createElement("img");
-      const asset = gun ? WEAPON_ASSETS[id] : SKIN_ASSETS[id];
+      const asset =
+        kind === 0
+          ? WEAPON_ASSETS[id]
+          : kind === 1
+            ? SKIN_ASSETS[id]
+            : kind === 2
+              ? KILL_EFFECTS[id].asset
+              : DANCES[id].asset;
       img.src = "/items/" + asset + ".svg";
-      img.alt = gun
-        ? info.name + " weapon illustration"
-        : info.name + " tactical outfit preview";
+      img.alt =
+        kind === 0
+          ? info.name + " weapon illustration"
+          : kind === 1
+            ? info.name + " tactical outfit preview"
+            : kind === 2
+              ? info.name + " elimination effect preview"
+              : info.name + " victory dance pose";
       img.width = 480;
       img.height = 280;
       img.loading = "lazy";
@@ -2292,28 +2418,33 @@ export class GameEngine {
       const content = document.createElement("div");
       content.className = "item-content";
       const title = document.createElement("h3");
-      title.textContent = info.name + (gun ? "" : " OUTFIT");
+      title.textContent = info.name + (kind === 1 ? " OUTFIT" : "");
       const detail = document.createElement("p");
       detail.className = "item-description";
-      detail.textContent = gun
-        ? id === 0
-          ? "Dependable. Versatile. Ready for anything."
-          : id === 2
-            ? "Get close. Make every shot count."
-            : id === 4
-              ? "Fast bursts. Keep the fight close."
-              : id === 5
-                ? "Controlled fire. Reach further."
-                : "A steady hand goes a long way."
-        : id === 0
-          ? "Made for the untamed wilderness."
-          : id === 1
-            ? "A cooler head in the heat of battle."
+      detail.textContent =
+        kind === 0
+          ? id === 0
+            ? "Dependable. Versatile. Ready for anything."
             : id === 2
-              ? "Leave a little fire in your wake."
-              : id === 3
-                ? "Quiet colors. Sharp instincts."
-                : "A little color on the frontier.";
+              ? "Get close. Make every shot count."
+              : id === 4
+                ? "Fast bursts. Keep the fight close."
+                : id === 5
+                  ? "Controlled fire. Reach further."
+                  : "A steady hand goes a long way."
+          : kind === 1
+            ? id === 0
+              ? "Made for the untamed wilderness."
+              : id === 1
+                ? "A cooler head in the heat of battle."
+                : id === 2
+                  ? "Leave a little fire in your wake."
+                  : id === 3
+                    ? "Quiet colors. Sharp instincts."
+                    : "A little color on the frontier."
+            : kind === 2
+              ? "Bursts where your opponent falls. Shown on your eliminations."
+              : "Plays automatically on the victory screen when you win.";
       const stats = document.createElement("div");
       stats.className = "item-stats";
       if (gun) {
@@ -2328,7 +2459,8 @@ export class GameEngine {
           "</b></span>";
       } else {
         const swatch = document.createElement("i");
-        swatch.style.background = SKINS[id].color;
+        swatch.style.background =
+          kind === 1 ? SKINS[id].color : kind === 2 ? KILL_EFFECTS[id].color : "#d9f877";
         stats.append(swatch);
         const note = document.createElement("span");
         note.textContent = "COSMETIC · NO STAT CHANGES";
@@ -2343,25 +2475,28 @@ export class GameEngine {
       sub.textContent = owned ? "Ready to equip" : "COINS · ONE-TIME UNLOCK";
       price.append(sub);
       const button = document.createElement("button");
-      const affordable = this.profile.coins >= info.cost;
+      const affordable = pr.coins >= info.cost;
       button.textContent = equipped ? "EQUIPPED" : owned ? "EQUIP" : "UNLOCK ↗";
       button.disabled = equipped || (!owned && !affordable);
       button.title =
         !owned && !affordable
-          ? "Earn " + (info.cost - this.profile.coins) + " more coins"
+          ? "Earn " + (info.cost - pr.coins) + " more coins"
           : gun
             ? "Equip for your next match"
-            : "Equip this outfit";
+            : "Equip this item";
       button.addEventListener("click", () => {
-        const success = gun
-          ? this.profile.buyWeapon(id)
-          : this.profile.buySkin(id);
+        const success =
+          kind === 0
+            ? pr.buyWeapon(id)
+            : kind === 1
+              ? pr.buySkin(id)
+              : pr.buyCosmetic(kind === 2 ? "effect" : "dance", id);
         $("shop-status").textContent = !success
           ? "Not enough coins yet. Keep playing."
           : this.lockerMode
             ? gun
               ? "Loadout saved for next match."
-              : "Outfit saved for next match."
+              : info.name + " equipped."
             : info.name + " unlocked and equipped. Find it in your Locker.";
         this.renderShop();
       });
@@ -2370,10 +2505,9 @@ export class GameEngine {
       row.append(visual, content);
       list.append(row);
     };
-    if (this.shopFilter !== "outfits")
-      for (const id of FIREARM_IDS) card(id, true);
-    if (this.shopFilter !== "weapons")
-      for (let id = 0; id < SKINS.length; id++) card(id, false);
+    for (let kind = 0; kind < 4; kind++)
+      if (filterKind < 0 || filterKind === kind)
+        for (const id of ids[kind]) card(id, kind);
   }
   private enterGame(): void {
     this.started = true;
@@ -2453,7 +2587,7 @@ export class GameEngine {
     this.notify("The host left · moving the match to a new host…");
     const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
     try {
-      if (net.successor && net.backup) {
+      const takeOver = async () => {
         const backup = net.backup as { token?: string },
           host = new HostSession(
             code,
@@ -2468,6 +2602,9 @@ export class GameEngine {
           return;
         }
         net.resume(() => host.local);
+      };
+      if (net.successor && net.backup) {
+        await takeOver();
         return;
       }
       // Give the successor a moment to come up, then reconnect to the same code.
@@ -2483,7 +2620,12 @@ export class GameEngine {
           net.resume(() => socket);
           return;
         } catch {
-          // The new host is not listening yet; retry.
+          // The new host is not listening yet; retry. As a last resort, any client
+          // holding a (possibly older) backup takes over so the match survives.
+          if (attempt === 4 && net.backup) {
+            await takeOver();
+            return;
+          }
         }
       }
     } catch {
@@ -2640,28 +2782,50 @@ export class GameEngine {
     $("leave-party").hidden = !online;
     $("join-room").textContent = "JOIN WITH CODE";
   }
+  /** Dirt path on land; wooden bridge spans wherever it crosses water. */
   private drawTrail(ctx: CanvasRenderingContext2D): void {
     const start = Math.floor((this.cameraY - this.viewH / 2 - 100) / 80) * 80,
-      end = this.cameraY + this.viewH / 2 + 100;
-    ctx.beginPath();
-    for (let y = start; y <= end; y += 80) {
-      const x = trailX(this.world.seed, y);
-      if (y === start) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      end = this.cameraY + this.viewH / 2 + 100,
+      w = this.world;
+    for (let pass = 0; pass < 3; pass++) {
+      ctx.beginPath();
+      for (let y = start; y < end; y += 80) {
+        const x0 = trailX(w.seed, y),
+          x1 = trailX(w.seed, y + 80),
+          wet =
+            terrainHeight(w.seed, (x0 + x1) / 2, y + 40, w.relief) < -0.24;
+        if (wet) continue;
+        ctx.moveTo(x0, y);
+        ctx.lineTo(x1, y + 80);
+      }
+      ctx.strokeStyle = pass === 0 ? "#a2a075" : pass === 1 ? "#b4ad80" : "#c3b98b33";
+      ctx.lineWidth = pass === 0 ? 69 : pass === 1 ? 51 : 2;
+      ctx.lineCap = "round";
+      ctx.stroke();
     }
-    ctx.strokeStyle = "#a2a075";
-    ctx.lineWidth = 69;
-    ctx.lineJoin = "round";
-    ctx.stroke();
-    ctx.strokeStyle = "#b4ad80";
-    ctx.lineWidth = 51;
-    ctx.stroke();
-    ctx.strokeStyle = "#c3b98b33";
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    ctx.lineCap = "butt";
+    for (let y = start; y < end; y += 80) {
+      const x0 = trailX(w.seed, y),
+        x1 = trailX(w.seed, y + 80);
+      if (terrainHeight(w.seed, (x0 + x1) / 2, y + 40, w.relief) >= -0.24) continue;
+      const a = Math.atan2(80, x1 - x0);
+      ctx.save();
+      ctx.translate(x0, y);
+      ctx.rotate(a);
+      ctx.fillStyle = "#1d3a3655";
+      ctx.fillRect(4, -22, 84, 50);
+      ctx.fillStyle = "#7a5a3a";
+      ctx.fillRect(0, -26, 84, 52);
+      ctx.fillStyle = "#946e48";
+      for (let k = 2; k < 84; k += 10) ctx.fillRect(k, -24, 7, 48);
+      ctx.fillStyle = "#5b4128";
+      ctx.fillRect(0, -28, 84, 4);
+      ctx.fillRect(0, 24, 84, 4);
+      ctx.restore();
+    }
   }
   private drawCamp(ctx: CanvasRenderingContext2D): void {
-    if (!this.visible(this.campX, this.campY, 180)) return;
+    if (this.campWet || !this.visible(this.campX, this.campY, 180)) return;
     ctx.save();
     ctx.translate(this.campX, this.campY);
     ctx.fillStyle = "#233a3155";
@@ -2769,17 +2933,58 @@ export class GameEngine {
     ctx.closePath();
     ctx.fill();
   }
+  /** Victory stage (wins only) → top-3 podium → results screen. */
+  private startFinale(won: boolean): void {
+    const top = this.standings().slice(0, 3),
+      places = document.querySelectorAll<HTMLElement>(".podium .place"),
+      order = [1, 0, 2]; // visual order: second, first, third
+    places.forEach((place, slot) => {
+      const e = top[order[slot]];
+      place.hidden = !e;
+      if (!e) return;
+      (place.querySelector("i") as HTMLElement).style.background = e.color;
+      place.querySelector("b")!.textContent = e.name + (e.you ? " · YOU" : "");
+      place.querySelector("span")!.textContent = e.kills + " ELIMINATIONS";
+      place.classList.toggle("you", e.you);
+    });
+    $("finale-sub").textContent = $("result-label").textContent ?? "";
+    $("finale-dance").hidden = !won;
+    $("finale-podium").hidden = won;
+    $("finale-screen").hidden = false;
+    this.finalePhase = won ? 1 : 2;
+    this.finaleClock = 0;
+  }
+  private advanceFinale(dt: number, skip = false): void {
+    this.finaleClock += dt;
+    if (this.finalePhase === 1 && (skip || this.finaleClock > 5)) {
+      this.finalePhase = 2;
+      this.finaleClock = 0;
+      $("finale-dance").hidden = true;
+      $("finale-podium").hidden = false;
+    } else if (this.finalePhase === 2 && (skip || this.finaleClock > 4.5)) this.endFinale();
+  }
+  private endFinale(): void {
+    if (!this.finalePhase) return;
+    this.finalePhase = 0;
+    $("finale-screen").hidden = true;
+    if (!this.matchFinished) return;
+    $("result-screen").hidden = false;
+    $("result-again").focus();
+  }
   /** Looping victory dance of the player's outfit on the win screen. */
   private drawDance(dt: number): void {
-    if ($("result-screen").hidden) {
-      this.dancing = false;
+    const stage = this.finalePhase === 1;
+    if (!stage && $("result-screen").hidden) {
+      if (!this.finalePhase) this.dancing = false;
       return;
     }
-    const canvas = $("victory-dance") as HTMLCanvasElement;
-    const c = (this.danceCtx ??= canvas.getContext("2d"));
+    const c = stage
+      ? (this.finaleCtx ??= ($("finale-canvas") as HTMLCanvasElement).getContext("2d"))
+      : (this.danceCtx ??= ($("victory-dance") as HTMLCanvasElement).getContext("2d"));
     if (!c) return;
-    const t = (this.danceClock += dt);
-    c.setTransform(1, 0, 0, 1, 0, 0);
+    const t = (this.danceClock += dt),
+      zoom = stage ? 1.5 : 1;
+    c.setTransform(zoom, 0, 0, zoom, 0, 0);
     c.clearRect(0, 0, 240, 200);
     c.fillStyle = "#d9f87722";
     c.beginPath();
@@ -2792,18 +2997,30 @@ export class GameEngine {
       c.fillStyle = k % 3 === 0 ? "#ffd65a" : k % 3 === 1 ? "#7fd3e6" : "#f0a36c";
       c.fillRect(x, fall - 20, 5, 9);
     }
+    // 0 Victory Spin, 1 Hop Party, 2 Axe Salute, 3 Side Shuffle, 4 Breakdown.
     const move = this.danceMove,
-      hop = move === 1 ? -Math.abs(Math.sin(t * 6)) * 14 : 0,
+      hop =
+        move === 1
+          ? -Math.abs(Math.sin(t * 6)) * 16
+          : move === 4
+            ? -Math.abs(Math.sin(t * 9)) * 8
+            : 0,
+      slide = move === 3 ? Math.sin(t * 5) * 34 : 0,
       angle =
         move === 0
           ? t * 5
           : move === 1
             ? -Math.PI / 2 + Math.sin(t * 6) * 0.35
-            : -Math.PI / 2 + Math.sin(t * 4) * 0.7,
+            : move === 2
+              ? -Math.PI / 2 + Math.sin(t * 4) * 0.7
+              : move === 3
+                ? (Math.cos(t * 5) > 0 ? 0 : Math.PI) + Math.sin(t * 10) * 0.2
+                : t * 11,
+      squash = move === 4 ? 1 + Math.sin(t * 18) * 0.12 : 1,
       swing = this.swing;
     if (move === 2) this.swing = 0.1 + Math.sin(t * 8) * 0.06;
-    c.translate(120, 120 + hop);
-    c.scale(2.4, 2.4);
+    c.translate(120 + slide, 120 + hop);
+    c.scale(2.4 * squash, 2.4 / squash);
     this.drawActor(c, 0, 0, angle, false, false, 1, -1, move === 2, this.player.gun);
     this.swing = swing;
   }
@@ -2813,28 +3030,69 @@ export class GameEngine {
     this.fxY[i] = y;
     this.fxAge[i] = 0;
     this.fxLocal[i] = local ? 1 : 0;
-    this.burst(x, y, local ? 18 : 8, 1);
+    this.fxStyle[i] = this.profile.effect;
+    this.burst(x, y, local ? 12 : 8, 1);
+    if (local) {
+      // Coloured sparks in the equipped effect's colour and a short screen shake.
+      this.burst(x, y, 26, 4);
+      this.shake = 0.28;
+    }
   }
   /** Elimination shockwave and rising label; drawn in world space, fixed slots. */
   private drawKillEffects(ctx: CanvasRenderingContext2D, dt: number): void {
     for (let i = 0; i < 8; i++) {
       const age = (this.fxAge[i] += dt);
-      if (age > 1.1 || !this.visible(this.fxX[i], this.fxY[i], 120)) continue;
+      if (age > 1.1 || !this.visible(this.fxX[i], this.fxY[i], 140)) continue;
       const x = this.fxX[i],
         y = this.fxY[i],
-        fade = 1 - age / 1.1;
+        fade = 1 - age / 1.1,
+        local = this.fxLocal[i] === 1,
+        style = local ? this.fxStyle[i] : -1,
+        color = style >= 0 ? KILL_EFFECTS[style].color : "#f0a36c",
+        grow = 20 + age * 120;
+      if (age < 0.14) {
+        // Impact flash.
+        ctx.globalAlpha = 1 - age / 0.14;
+        ctx.fillStyle = local ? "#ffffff" : color;
+        ctx.beginPath();
+        ctx.arc(x, y, 18 + age * 160, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.globalAlpha = fade;
-      ctx.strokeStyle = this.fxLocal[i] ? "#ffd65a" : "#f0a36c";
+      ctx.strokeStyle = color;
       ctx.lineWidth = 5 * fade + 1;
       ctx.beginPath();
-      ctx.arc(x, y, 20 + age * 120, 0, Math.PI * 2);
+      // Void Rift collapses inward; every other style expands.
+      ctx.arc(x, y, style === 4 ? Math.max(4, 130 - age * 115) : grow, 0, Math.PI * 2);
       ctx.stroke();
-      if (this.fxLocal[i]) {
-        ctx.fillStyle = "#ffe9a3";
-        ctx.font = "800 18px sans-serif";
+      if (style === 1 || style === 2) {
+        // Frost shards / ember tongues flying outward.
+        ctx.fillStyle = style === 1 ? "#e8fbff" : "#ffcf5a";
+        for (let k = 0; k < 10; k++) {
+          const a = k * 0.628 + age * (style === 2 ? 2 : 0.3),
+            r = grow * 0.9;
+          ctx.fillRect(x + Math.cos(a) * r - 3, y + Math.sin(a) * r - (style === 2 ? 8 : 3), 6, style === 2 ? 12 : 6);
+        }
+      } else if (style === 3) {
+        ctx.strokeStyle = "#4ff0ff";
+        ctx.beginPath();
+        ctx.arc(x, y, grow * 0.7, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      if (local) {
+        // Label pops in large, then settles and rises.
+        const pop = age < 0.15 ? 1.6 - age * 4 : 1;
+        ctx.save();
+        ctx.translate(x, y - 44 - age * 40);
+        ctx.scale(pop, pop);
+        ctx.font = "900 20px sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText("ELIMINATED", x, y - 40 - age * 40);
-        ctx.textAlign = "start";
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = "#10251d";
+        ctx.strokeText("ELIMINATED", 0, 0);
+        ctx.fillStyle = style === 0 ? "#ffe9a3" : color;
+        ctx.fillText("ELIMINATED", 0, 0);
+        ctx.restore();
       }
       ctx.globalAlpha = 1;
     }
@@ -2917,21 +3175,29 @@ export class GameEngine {
     ctx.fillStyle = "#fff3b0";
     ctx.fillRect(x - 1, y - 5, 2, 3);
   }
+  /** Point gem: a floating diamond worth points (no healing). */
   private drawCache(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    const bob = Math.sin(this.matchTime * 3 + x * 0.05) * 3;
     ctx.fillStyle = "#defc7630";
     ctx.beginPath();
-    ctx.ellipse(x, y, 29, 16, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y + 6, 18, 8, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#2b4937";
-    ctx.fillRect(x - 14, y - 15, 28, 23);
-    ctx.strokeStyle = "#d6ee88";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x - 14, y - 15, 28, 23);
-    ctx.fillStyle = "#c9d88a";
-    ctx.fillRect(x - 14, y - 18, 28, 7);
-    ctx.fillStyle = "#effac0";
-    ctx.fillRect(x - 2, y - 7, 5, 8);
-    ctx.fillRect(x - 4, y - 4, 9, 3);
+    ctx.fillStyle = "#d9f877";
+    ctx.beginPath();
+    ctx.moveTo(x, y - 20 + bob);
+    ctx.lineTo(x + 11, y - 7 + bob);
+    ctx.lineTo(x, y + 4 + bob);
+    ctx.lineTo(x - 11, y - 7 + bob);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#f4ffd0";
+    ctx.beginPath();
+    ctx.moveTo(x, y - 20 + bob);
+    ctx.lineTo(x + 4, y - 7 + bob);
+    ctx.lineTo(x, y - 2 + bob);
+    ctx.lineTo(x - 5, y - 9 + bob);
+    ctx.closePath();
+    ctx.fill();
   }
   private drawFlags(ctx: CanvasRenderingContext2D): void {
     const net = this.network;
@@ -3383,6 +3649,8 @@ export class GameEngine {
     this.ground.invalidate();
     this.campY = -220 - hash(this.world.seed, 91, 2) * 500;
     this.campX = trailX(this.world.seed, this.campY) + 150;
+    this.campWet =
+      terrainHeight(this.world.seed, this.campX, this.campY, this.world.relief) < -0.12;
     this.player.reset();
     this.allyKills.fill(0);
     this.enemies.kills.fill(0);
@@ -3408,6 +3676,8 @@ export class GameEngine {
     this.enemySpawned = 0;
     this.autoClock = 0;
     $("result-screen").hidden = true;
+    this.finalePhase = 0;
+    $("finale-screen").hidden = true;
     $("result-status").textContent = "";
     this.ui.toast.textContent = "";
     this.toastClock = 0;

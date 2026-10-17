@@ -95,6 +95,26 @@ export function terrainIndex(seed: number, x: number, y: number, h: number) {
 }
 /** Object kinds: 0 tree, 1 rock, 2 cache/chest, 3 spawn anchor, 4 bush, 5 structure. */
 export const STRUCTURE = 5;
+/**
+ * True when a spawn point is in water or inside/against a structure.
+ * Structures sit at least 140 units inside their chunk, so only the point's own
+ * chunk needs checking; `scratch` is regenerated for it.
+ */
+export function blockedSpot(
+  seed: number,
+  x: number,
+  y: number,
+  relief: number,
+  density: number,
+  scratch: Chunk,
+): boolean {
+  if (terrainHeight(seed, x, y, relief) < -0.24) return true;
+  scratch.generate(seed, Math.floor(x / CHUNK), Math.floor(y / CHUNK), relief, density);
+  return (
+    scratch.kind[0] === STRUCTURE &&
+    Math.hypot(x - scratch.ox[0], y - scratch.oy[0]) < STRUCTURE_RADIUS + 45
+  );
+}
 /** Rare ground medkit, collected like a cache. */
 export const MEDKIT = 6;
 /** Structures block movement and shots within this radius of their centre. */
@@ -141,8 +161,9 @@ export class Chunk {
       this.terrain[i] = terrainIndex(seed, wx, wy, h);
     }
     for (let i = 0; i < OBJECTS; i++) {
-      this.ox[i] = x * CHUNK + hash(seed + i * 17, x, y) * CHUNK;
-      this.oy[i] = y * CHUNK + hash(seed + i * 17 + 9, x, y) * CHUNK;
+      // Keep a margin from chunk edges so props never overlap a neighbour's.
+      this.ox[i] = x * CHUNK + 28 + hash(seed + i * 17, x, y) * (CHUNK - 56);
+      this.oy[i] = y * CHUNK + 28 + hash(seed + i * 17 + 9, x, y) * (CHUNK - 56);
       const r = hash(seed + i * 31 + 400, x, y);
       this.kind[i] = r > 1 - enemyDensity ? 3 : r < 0.62 ? 0 : r < 0.84 ? 1 : 2;
       if (this.kind[i] === 0 && hash(seed + i * 97 + 433, x, y) > 0.72)
@@ -187,6 +208,24 @@ export class Chunk {
         this.hp[1] = 1;
         this.chest[1] = 1;
       }
+    }
+    // Final surface pass (covers relocated structure caches): nothing in water.
+    for (let i = 0; i < OBJECTS; i++)
+      if (this.kind[i] !== STRUCTURE && terrainHeight(seed, this.ox[i], this.oy[i], relief) < -0.24)
+        this.hp[i] = 0;
+    // Spacing: drop props that would stand inside an earlier one (deterministic order).
+    for (let i = 1; i < OBJECTS; i++) {
+      if (this.hp[i] <= 0 || this.kind[i] === 3) continue;
+      for (let j = 0; j < i; j++)
+        if (
+          this.hp[j] > 0 &&
+          this.kind[j] !== 3 &&
+          Math.hypot(this.ox[i] - this.ox[j], this.oy[i] - this.oy[j]) <
+            (this.kind[i] === 0 || this.kind[j] === 0 ? 58 : 44)
+        ) {
+          this.hp[i] = 0;
+          break;
+        }
     }
     // Roughly one chunk in five holds a ground medkit (object slot 2, on dry land).
     if (hash(seed + 7001, x, y) < 0.2 && this.hp[2] > 0 && this.kind[2] !== 3) {

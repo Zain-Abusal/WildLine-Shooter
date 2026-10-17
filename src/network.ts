@@ -79,9 +79,16 @@ export class Multiplayer {
   backupAt = 0;
   private joinPayload: Record<string, unknown> = {};
   onHostLost: () => void = () => {};
-  /** This client holds a fresh authority backup, so it should take over hosting. */
+  onResumeFailed: () => void = () => {};
+  /** Last message from the current host (any type). */
+  lastMessageAt = 0;
+  /**
+   * This client was receiving backups right up to the host going silent, so it
+   * is the designated successor. Measured against the host's last message, not
+   * wall time, because noticing a vanished WebRTC peer can take several seconds.
+   */
   get successor(): boolean {
-    return !!this.backup && Date.now() - this.backupAt < 3000;
+    return !!this.backup && this.lastMessageAt - this.backupAt < 2500;
   }
   /** CTF state: flag positions, carrier IDs (0 = none), home flags and captures per team. */
   readonly flagX = new Float64Array(2);
@@ -243,6 +250,7 @@ export class Multiplayer {
         return;
       }
       if (!data || typeof data.t !== "string") return;
+      this.lastMessageAt = Date.now();
       if (data.t === "welcome") {
         if (
           typeof data.seed !== "string" ||
@@ -546,6 +554,11 @@ export class Multiplayer {
       )
         this.onEdit(data.x, data.y, data.i, data.hp);
       if (data.t === "error") {
+        if (this.migrating) {
+          // The new host does not know this slot (e.g. joined just before the crash).
+          this.onResumeFailed();
+          return;
+        }
         if (!this.connected) this.disconnect(false);
         this.onStatus(
           typeof data.message === "string"
