@@ -86,6 +86,8 @@ type Actor = {
   stamina: number;
   /** Respawn modes: untargetable until this time (ms) unless they attack first. */
   shieldUntil?: number;
+  /** Developer tools granted to the hosting browser's own player (see admin()). */
+  admin?: { god: boolean; ammo: boolean; speed: boolean; range: boolean };
 };
 type Player = Actor & {
   /** Private token that lets this player reclaim their slot after host migration. */
@@ -95,8 +97,13 @@ type Player = Actor & {
   budgetAt: number;
   alive: boolean;
 };
+/** Preferred fighting distance per weapon id (axe = melee). */
+const PREFERRED_RANGE = [260, 40, 140, 520, 180, 420, 200, 300];
 type Bot = Actor & {
   active: boolean;
+  /** Reaction time: a newly acquired target cannot be shot before reactAt. */
+  lastTarget?: number;
+  reactAt?: number;
   /** Battle royale: cached chest the unarmed bot is heading to (re-scanned every 2 s). */
   chest?: { cx: number; cy: number; i: number; x: number; y: number; at: number };
 };
@@ -359,17 +366,18 @@ export function createAuthority(options: AuthorityOptions = {}) {
       (weapon !== 1 && weapon !== p.weapon) ||
       (weapon !== 1 && !(room.weapons & (1 << weapon))) ||
       (weapon !== 1 &&
-        (p.reloading > now || (!room.infiniteAmmo && p.magazine <= 0))) ||
+        (p.reloading > now ||
+          (!room.infiniteAmmo && !p.admin?.ammo && p.magazine <= 0))) ||
       now - p.lastShot < WEAPONS[weapon].cooldown * 1000 - 12
     )
       return;
     p.lastShot = now;
     p.shieldUntil = 0; // attacking ends spawn protection
-    if (weapon !== 1 && !room.infiniteAmmo) p.magazine--;
+    if (weapon !== 1 && !room.infiniteAmmo && !p.admin?.ammo) p.magazine--;
     p.angle = angle;
     const dx = Math.cos(angle),
       dy = Math.sin(angle),
-      range = WEAPONS[weapon].range;
+      range = p.admin?.range ? 6000 : WEAPONS[weapon].range;
     let nearest: number = range,
       victim: Actor | null = null,
       cx = 0,
@@ -461,7 +469,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
         target.lastHitAt = now;
         target.lastHitWeapon = weapon;
       }
-      target.health = Math.max(
+      if (!target.admin?.god) target.health = Math.max(
         0,
         target.health -
           // Bots hit with a share of their actual weapon's damage.
@@ -694,7 +702,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
         const scale = (r.radius * 0.85) / Math.hypot(p.x, p.y);
         p.x *= scale;
         p.y *= scale;
-      } else if (Math.hypot(p.x, p.y) > r.radius) {
+      } else if (Math.hypot(p.x, p.y) > r.radius && !p.admin?.god) {
         p.health = Math.max(
           0,
           p.health - stormDamage(r.elapsed, r.mode === "br") * 0.1,
@@ -926,6 +934,19 @@ export function createAuthority(options: AuthorityOptions = {}) {
       }
     bot.startingWeapon = bot.weapon;
   }
+  function nearestMedkit(room: Room, bot: Actor, range: number) {
+    let best: (typeof room.loots)[number] | undefined,
+      bestD = range;
+    for (const loot of room.loots)
+      if (loot.heal > 0) {
+        const d = Math.hypot(loot.x - bot.x, loot.y - bot.y);
+        if (d < bestD) {
+          bestD = d;
+          best = loot;
+        }
+      }
+    return best;
+  }
   /** CTF bot goals: carriers run home, even slots attack the enemy flag, odd slots defend. */
   function flagObjective(
     room: Room,
@@ -1050,20 +1071,57 @@ export function createAuthority(options: AuthorityOptions = {}) {
             : Math.sin(patrolAngle) * patrolRadius;
       const dx = tx - bot.x,
         dy = ty - bot.y,
-        d = Math.hypot(dx, dy);
+        d = Math.hypot(dx, dy) || 1;
       bot.angle = Math.atan2(dy, dx);
       if (chest && !chase && d < 70) {
         scratch = chunkAt(seedHash(room.seed), chest.cx, chest.cy, room.relief, room.density);
         openCache(room, bot, chest.cx, chest.cy, chest.i);
         bot.chest = undefined;
       }
-      if (d > (chase ? (unarmed ? 40 : 210) : 60)) {
+      // Reaction time when a new target is acquired (shorter on harder difficulty).
+      if (goal && bot.lastTarget !== goal.id) {
+        bot.lastTarget = goal.id;
+        bot.reactAt =
+          now + (380 + hash(seedHash(room.seed), bot.id, now & 1023) * 320) / room.botDifficulty;
+      } else if (!goal) bot.lastTarget = undefined;
+      const fromCenter = Math.hypot(bot.x, bot.y),
+        stormRisk =
+          stormMode(room.mode) && room.startedAt > 0 && fromCenter > room.radius - 160,
+        medkit = bot.health < 35 && !stormRisk ? nearestMedkit(room, bot, 700) : undefined;
+      // Movement intent: storm first, then healing, then combat spacing, else objective/patrol.
+      let mx = 0,
+        my = 0;
+      if (stormRisk) {
+        mx = -bot.x / (fromCenter || 1);
+        my = -bot.y / (fromCenter || 1);
+      } else if (medkit) {
+        const md = Math.hypot(medkit.x - bot.x, medkit.y - bot.y) || 1;
+        mx = (medkit.x - bot.x) / md;
+        my = (medkit.y - bot.y) / md;
+      } else if (chase) {
+        const preferred = PREFERRED_RANGE[bot.weapon] ?? 260,
+          radial =
+            distance > preferred + 40 ? 1 : distance < preferred - 60 && !unarmed ? -1 : 0,
+          strafe = unarmed ? 0 : Math.sin(now / 700 + bot.id * 1.7) > 0 ? 0.75 : -0.75;
+        mx = (dx / d) * radial - (dy / d) * strafe;
+        my = (dy / d) * radial + (dx / d) * strafe;
+        const len = Math.hypot(mx, my);
+        if (len > 1) {
+          mx /= len;
+          my /= len;
+        }
+      } else if (d > 60) {
+        mx = dx / d;
+        my = dy / d;
+      }
+      if (mx || my) {
         const stride =
           terrainHeight(seedHash(room.seed), bot.x, bot.y, room.relief) < -0.24
             ? 5.6
             : 9;
-        bot.x += (dx / d) * stride * room.botDifficulty;
-        bot.y += (dy / d) * stride * room.botDifficulty;
+        bot.x += mx * stride * room.botDifficulty;
+        bot.y += my * stride * room.botDifficulty;
+        if (!chase) bot.angle = Math.atan2(my, mx);
       }
       // Separation prevents a squad from collapsing into one position.
       for (const other of room.bots)
@@ -1102,19 +1160,24 @@ export function createAuthority(options: AuthorityOptions = {}) {
       if (bot.magazine === 0) reload(bot);
       if (
         goal &&
+        chase &&
+        now >= (bot.reactAt ?? 0) &&
         distance < Math.min(WEAPONS[bot.weapon].range, 700) &&
         now - bot.lastShot >
           Math.max(
             1100 / room.botDifficulty,
             WEAPONS[bot.weapon].cooldown * 1000,
           )
-      )
+      ) {
+        // Aim error grows with distance; harder bots are steadier.
+        const spread = (0.05 + distance / 5000) / room.botDifficulty;
         attack(
           bot,
-          bot.angle +
-            Math.sin(bot.id + now / 600) * (0.12 / room.botDifficulty),
+          Math.atan2(goal.y - bot.y, goal.x - bot.x) +
+            Math.sin(bot.id * 3.1 + now / 530) * spread,
           bot.weapon,
         );
+      }
     }
   }
   const ignore: ConnHandlers = {
@@ -1192,7 +1255,8 @@ export function createAuthority(options: AuthorityOptions = {}) {
             const elapsed = Math.min(1, (now - p.lastMove) / 1000),
               distance = Math.hypot(a - p.x, b - p.y),
               // Sprinting (up to 1.45 × 235) is allowed only while stamina lasts.
-              limit = elapsed * (p.stamina > 0 ? 360 : 260) + 3;
+              limit =
+                elapsed * (p.stamina > 0 ? 360 : 260) * (p.admin?.speed ? 2 : 1) + 3;
             if (distance <= limit && Math.abs(a) < 1e8 && Math.abs(b) < 1e8) {
               if (distance > elapsed * 250)
                 p.stamina = Math.max(0, p.stamina - STAMINA_DRAIN * elapsed);
@@ -1237,7 +1301,10 @@ export function createAuthority(options: AuthorityOptions = {}) {
           if (t === 4 && p.ready && p.health > 0) collect(p, a !== 1);
           return;
         }
-        if (p.room) return;
+        if (p.room) {
+          if (ws.local) admin(p, data);
+          return;
+        }
         const msg = JSON.parse(
           typeof data === "string" ? data : decoder.decode(data),
         );
@@ -1552,6 +1619,32 @@ export function createAuthority(options: AuthorityOptions = {}) {
       p.ws.ping();
     }
   }, 15000);
+  /**
+   * Developer tools from the hosting browser's own (local) connection only, and
+   * never against other real players in a public match.
+   */
+  function admin(p: Player, data: Uint8Array | string): void {
+    const room = p.room!;
+    if (room.public && room.players.size > 1) return;
+    let msg: Record<string, unknown>;
+    try {
+      msg = JSON.parse(typeof data === "string" ? data : decoder.decode(data));
+    } catch {
+      return;
+    }
+    if (msg.t !== "admin") return;
+    if (msg.op === "tp" && finite(msg.x) && finite(msg.y)) {
+      p.x = Math.max(-1e6, Math.min(1e6, msg.x));
+      p.y = Math.max(-1e6, Math.min(1e6, msg.y));
+      p.lastMove = Date.now();
+    } else if (msg.op === "flags")
+      p.admin = {
+        god: msg.god === true,
+        ammo: msg.ammo === true,
+        speed: msg.speed === true,
+        range: msg.range === true,
+      };
+  }
   /** Portable room state for host migration (map edits travel separately). */
   function serializeRoom(room: Room, now = Date.now()) {
     // Snapshot bookkeeping is per host and stays out of backups.

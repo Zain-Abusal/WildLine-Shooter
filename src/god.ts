@@ -4,8 +4,9 @@
  * stored here; the password itself never appears in the code.
  *
  * This is obfuscation for a dev tool, not security: anyone can edit client code.
- * Tools are disabled in public matches; online, the authority still validates
- * movement, health and ammo, so only ESP and aim assist apply in private parties.
+ * Full tools work offline and in matches this browser hosts (via the authority's
+ * admin channel), never against other real players in public matches; in other
+ * hosts' private parties only ESP and aim assist apply.
  */
 const CHECK = "a64131e931d8621c73ec1d50debfc71cf2ae4b56968f7e5693dec2c1fa57b4f5";
 const DEVICE_VERIFY =
@@ -193,10 +194,10 @@ export class GodMode {
     const note = document.createElement("small");
     note.textContent =
       scope === "off"
-        ? "Disabled in public matches."
+        ? "Disabled in public matches with other real players."
         : scope === "assist"
-          ? "Online party: the host's authority controls health, ammo and movement, so only ESP and aim assist apply."
-          : "Offline: all tools active.";
+          ? "In someone else's party: their host controls health, ammo and movement, so only ESP and aim assist apply."
+          : "All tools active (offline, or a match you host).";
     root.append(note);
   }
 }

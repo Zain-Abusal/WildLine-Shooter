@@ -119,3 +119,52 @@ test("spectating and respawn rooms wait for an explicit winner; individual winne
   assert.equal(roundOutcome(true, 100, 3, 0, undefined, 7), "", "missing id is no result");
   assert.equal(roundOutcome(true, 0, 3, 0, 7, 7, false), "won");
 });
+
+test("compact snapshots keep names, teams and the human/bot split between full updates", () => {
+  const previousSocket = globalThis.WebSocket,
+    previousLocation = (globalThis as any).location;
+  let socket: any;
+  class FakeSocket {
+    static OPEN = 1;
+    readyState = 1;
+    bufferedAmount = 0;
+    onmessage: ((event: any) => void) | null = null;
+    close() {}
+    send() {}
+    constructor() {
+      socket = this;
+    }
+  }
+  (globalThis as any).WebSocket = FakeSocket;
+  (globalThis as any).location = { protocol: "http:" };
+  const network = new Multiplayer();
+  const emit = (data: unknown) => socket.onmessage({ data: JSON.stringify(data) });
+  try {
+    network.connect("ws://localhost", "COMPACT", "Test", "seed", 1, 0.04);
+    emit({ t: "welcome", id: 1, room: "COMPACT", seed: "seed", x: 0, y: 0, team: 0 });
+    const full = [
+      { id: 1, x: 0, y: 0, health: 100, ready: true, name: "Me", team: 0, bot: false },
+      { id: -1, x: 10, y: 0, health: 100, ready: true, name: "BotOne", team: 1, bot: true, skin: 3 },
+      { id: 7, x: 20, y: 0, health: 100, ready: true, name: "Friend", team: 0, bot: false },
+    ];
+    emit({ t: "state", players: full, loots: [{ x: 5, y: 5, weapon: 2, ammo: 10, gun: true }] });
+    assert.equal(network.humanCount, 2);
+    assert.equal(network.botCount, 1);
+    // Compact snapshot: no static fields, no loots.
+    emit({
+      t: "state",
+      players: full.map(({ id, x, y, health, ready }) => ({ id, x: x + 1, y, health, ready })),
+    });
+    assert.equal(network.humanCount, 2, "bots are not counted as humans");
+    assert.equal(network.botCount, 1);
+    const slot = network.ids.indexOf(-1);
+    assert.equal(network.names[slot], "BotOne", "name kept between full snapshots");
+    assert.equal(network.outfits[slot], 3);
+    assert.equal(network.teams[slot], 1);
+    assert.equal(network.loot.count, 1, "loot kept when the snapshot omits it");
+  } finally {
+    network.disconnect(false);
+    (globalThis as any).WebSocket = previousSocket;
+    (globalThis as any).location = previousLocation;
+  }
+});

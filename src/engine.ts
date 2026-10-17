@@ -89,6 +89,9 @@ class Fighters extends Pool {
   walk = new Float32Array(this.capacity);
   flash = new Float32Array(this.capacity);
 }
+/** Offline fighters' preferred distance per weapon id (they shoot within 420). */
+const OFFLINE_RANGE = [230, 40, 150, 380, 170, 340, 190, 260];
+const CONFETTI = ["#ff7eb6", "#ffd65a", "#7fd3e6", "#9dff3c", "#c9a0ff"];
 /** Damage-number labels precomputed so rendering never formats strings. */
 const DAMAGE_TEXT = Array.from({ length: 201 }, (_, i) => String(i));
 /** Held-gun silhouette per weapon ID: length, thickness and body colour. */
@@ -206,6 +209,8 @@ export class GameEngine {
   private recoil = 0;
   private god: GodMode | null = null;
   private targetX = 0;
+  /** Last dev-tool flag set sent to the host authority (-1 = resend). */
+  private adminKey = -1;
   private targetY = 0;
   /** ?dev-mode=true diagnostics (set in main.ts before construction). */
   private readonly devMode = document.body.classList.contains("dev-mode");
@@ -537,6 +542,7 @@ export class GameEngine {
       void this.connectPeer(code, false, false);
     };
     this.network.onWelcome = (data) => {
+      this.adminKey = -1;
       if ((data as { resumed?: boolean }).resumed) {
         // Same match, new host: keep the world, position and HUD as they are.
         this.setOnlineControls(true);
@@ -999,6 +1005,23 @@ export class GameEngine {
     this.previousHealth = p.health;
     this.toastClock -= dt;
     if (god?.godOn) p.health = 100;
+    if (god && this.network.connected && this.network.localHost) {
+      const key =
+        (god.godOn ? 1 : 0) |
+        (god.ammoOn ? 2 : 0) |
+        (god.speedOn ? 4 : 0) |
+        (god.rangeOn ? 8 : 0);
+      if (key !== this.adminKey) {
+        this.adminKey = key;
+        this.network.admin({
+          op: "flags",
+          god: god.godOn,
+          ammo: god.ammoOn,
+          speed: god.speedOn,
+          range: god.rangeOn,
+        });
+      }
+    }
     if (!this.network.connected) {
       const radius = stormRadius(this.matchTime, this.brMode),
         damage = stormDamage(this.matchTime, this.brMode) * dt;
@@ -1225,9 +1248,25 @@ export class GameEngine {
           dy = ty - e.y[n],
           d = nearest;
         const speed = e.kind[n] === 0 ? 100 : e.kind[n] === 1 ? 66 : 43;
-        if (d < 500 && d > 165) {
-          e.x[n] += (dx / d) * speed * this.botDifficulty * dt;
-          e.y[n] += (dy / d) * speed * this.botDifficulty * dt;
+        // Weapon-aware spacing with strafing; the storm edge overrides everything.
+        const zone = stormRadius(this.matchTime, this.brMode),
+          out = Math.hypot(e.x[n], e.y[n]);
+        let mx = 0,
+          my = 0;
+        if (out > zone - 150) {
+          mx = -e.x[n] / (out || 1);
+          my = -e.y[n] / (out || 1);
+        } else if (d < 500 && d > 0) {
+          const preferred = OFFLINE_RANGE[e.gun[n]] ?? 220,
+            radial = d > preferred + 40 ? 1 : d < preferred - 60 ? -1 : 0,
+            strafe = Math.sin(this.matchTime * 1.4 + n * 1.7) > 0 ? 0.7 : -0.7;
+          mx = (dx / d) * radial - (dy / d) * strafe;
+          my = (dy / d) * radial + (dx / d) * strafe;
+        }
+        if (mx || my) {
+          const len = Math.max(1, Math.hypot(mx, my));
+          e.x[n] += (mx / len) * speed * this.botDifficulty * dt;
+          e.y[n] += (my / len) * speed * this.botDifficulty * dt;
           e.walk[n] = 0.2;
         }
         for (let k = 0; k < e.capacity; k++)
@@ -1854,7 +1893,7 @@ export class GameEngine {
             y - 124,
           );
         else if (c.kind[j] === 1)
-          ctx.drawImage(this.props.rock, x - 32, y - 38);
+          ctx.drawImage(this.props.rocks[c.biome[j] * 2 + (j & 1)], x - 36, y - 38);
         else if (c.kind[j] === MEDKIT) this.drawLoot(ctx, x, y, 2, 0, 0);
         else if (c.kind[j] === STRUCTURE)
           ctx.drawImage(this.props.houses[c.biome[j]] ?? this.props.houses[0], x - 100, y - 118);
@@ -2230,8 +2269,14 @@ export class GameEngine {
   /** Enable ?god-mode=zrax developer tools (menu behind the L key and a password). */
   enableGod(): void {
     const god = (this.god = new GodMode());
-    god.scope = () =>
-      !this.network.connected ? "full" : this.network.public ? "off" : "assist";
+    // Offline, or hosting with no other real players in public (private parties
+    // are always allowed): the host's authority applies the tools for real.
+    god.scope = () => {
+      const net = this.network;
+      if (!net.connected) return "full";
+      if (net.localHost && (!net.public || net.humanCount <= 1)) return "full";
+      return net.public ? "off" : "assist";
+    };
     god.onAction = (action) => {
       if (god.scope() !== "full" || !this.started) return;
       const p = this.player;
@@ -2244,6 +2289,11 @@ export class GameEngine {
       p.vx = p.vy = 0;
       this.cameraX = p.x;
       this.cameraY = p.y;
+      if (this.network.connected) {
+        this.network.admin({ op: "tp", x: p.x, y: p.y });
+        this.network.serverX = p.x;
+        this.network.serverY = p.y;
+      }
     };
   }
   /** Dev mode only: small BOT / HUMAN tag above a combatant. */
@@ -2345,7 +2395,8 @@ export class GameEngine {
       }
   }
   private finishMatch(won: boolean, draw = false): void {
-    if (this.matchFinished) return;
+    // A result that arrives while not playing (start screen, stale connection) is ignored.
+    if (this.matchFinished || !this.started) return;
     this.matchFinished = true;
     this.paused = true;
     this.input.clear();
@@ -2855,6 +2906,8 @@ export class GameEngine {
   }
   private enterGame(): void {
     this.started = true;
+    this.finalePhase = 0;
+    $("finale-screen").hidden = true;
     let seen = "";
     try {
       seen = localStorage.getItem("wildline.tutorial.v1") || "";
@@ -2953,6 +3006,8 @@ export class GameEngine {
           host.stop();
           return;
         }
+        net.localHost = true;
+        this.adminKey = -1;
         net.resume(() => host.local);
       };
       if (net.successor && net.backup) {
@@ -3066,6 +3121,8 @@ export class GameEngine {
         session ? () => session.local : () => socket!,
         isPublic,
       );
+      // After connect(), which resets connection state.
+      this.network.localHost = !!session;
     } catch (error) {
       host?.stop();
       if (generation !== this.network.generation) return;
@@ -3349,15 +3406,21 @@ export class GameEngine {
       c.fillStyle = k % 3 === 0 ? "#ffd65a" : k % 3 === 1 ? "#7fd3e6" : "#f0a36c";
       c.fillRect(x, fall - 20, 5, 9);
     }
-    // 0 Victory Spin, 1 Hop Party, 2 Axe Salute, 3 Side Shuffle, 4 Breakdown.
+    // 0 Victory Spin, 1 Hop Party, 2 Axe Salute, 3 Side Shuffle, 4 Breakdown,
+    // 5 Robot, 6 Moonwalk, 7 Windmill.
     const move = this.danceMove,
       hop =
         move === 1
           ? -Math.abs(Math.sin(t * 6)) * 16
-          : move === 4
+          : move === 4 || move === 7
             ? -Math.abs(Math.sin(t * 9)) * 8
             : 0,
-      slide = move === 3 ? Math.sin(t * 5) * 34 : 0,
+      slide =
+        move === 3
+          ? Math.sin(t * 5) * 34
+          : move === 6
+            ? 40 - ((t * 40) % 80)
+            : 0,
       angle =
         move === 0
           ? t * 5
@@ -3367,8 +3430,19 @@ export class GameEngine {
               ? -Math.PI / 2 + Math.sin(t * 4) * 0.7
               : move === 3
                 ? (Math.cos(t * 5) > 0 ? 0 : Math.PI) + Math.sin(t * 10) * 0.2
-                : t * 11,
-      squash = move === 4 ? 1 + Math.sin(t * 18) * 0.12 : 1,
+                : move === 5
+                  ? Math.floor(t * 2.5) * (Math.PI / 2) + Math.sin(t * 30) * 0.03
+                  : move === 6
+                    ? 0
+                    : move === 7
+                      ? t * 16
+                      : t * 11,
+      squash =
+        move === 4
+          ? 1 + Math.sin(t * 18) * 0.12
+          : move === 7
+            ? 1 + Math.sin(t * 16) * 0.2
+            : 1,
       swing = this.swing;
     if (move === 2) this.swing = 0.1 + Math.sin(t * 8) * 0.06;
     c.translate(120 + slide, 120 + hop);
@@ -3455,6 +3529,42 @@ export class GameEngine {
         ctx.beginPath();
         ctx.arc(x, y, grow * 0.7, 0, Math.PI * 2);
         ctx.stroke();
+      } else if (style === 5) {
+        // Lightning: jagged bolts radiating out.
+        ctx.strokeStyle = "#fff35c";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        for (let k = 0; k < 6; k++) {
+          const a = k * 1.047 + 0.3;
+          ctx.moveTo(x, y);
+          ctx.lineTo(x + Math.cos(a) * grow * 0.4, y + Math.sin(a) * grow * 0.4 + 8);
+          ctx.lineTo(x + Math.cos(a) * grow * 0.7, y + Math.sin(a) * grow * 0.7 - 6);
+          ctx.lineTo(x + Math.cos(a) * grow, y + Math.sin(a) * grow);
+        }
+        ctx.stroke();
+      } else if (style === 6) {
+        // Confetti: tumbling multicolour pieces.
+        for (let k = 0; k < 16; k++) {
+          const a = k * 0.9,
+            r = grow * (0.5 + (k % 4) * 0.15);
+          ctx.fillStyle = CONFETTI[k % 5];
+          ctx.fillRect(x + Math.cos(a) * r - 3, y + Math.sin(a) * r + age * 60 - 4, 6, 9);
+        }
+      } else if (style === 7) {
+        // Toxic: rising bubbles.
+        ctx.fillStyle = "#9dff3c";
+        for (let k = 0; k < 10; k++) {
+          const a = k * 0.63;
+          ctx.beginPath();
+          ctx.arc(
+            x + Math.cos(a) * grow * 0.6,
+            y + Math.sin(a) * grow * 0.6 - age * 50,
+            4 + (k % 3) * 2,
+            0,
+            Math.PI * 2,
+          );
+          ctx.fill();
+        }
       }
       if (local) {
         // Label pops in large, then settles and rises.
@@ -3657,6 +3767,12 @@ export class GameEngine {
               : "#9a799b"
           : SKINS[this.outfit].color;
     ctx.fillRect(-10, -12, 22, 24);
+    // Outline and a team armband (blue allies / orange enemies) for readability.
+    ctx.strokeStyle = "#10251d99";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(-10, -12, 22, 24);
+    ctx.fillStyle = enemy ? "#f0a36c" : "#7fd3e6";
+    ctx.fillRect(-4, -12, 6, 4);
     ctx.fillStyle = enemy ? "#644b43" : "#294d45";
     ctx.fillRect(-15, -8, 9, 16);
     if (axe) {
@@ -3687,6 +3803,12 @@ export class GameEngine {
         ctx.fillStyle = "#151f1c";
         ctx.fillRect(12, 12, 4, 6);
       }
+      // Hands gripping the weapon.
+      ctx.fillStyle = hurt ? "#f8c4a3" : enemy ? "#e4b38b" : "#dde1c3";
+      ctx.beginPath();
+      ctx.arc(7, 10, 3.2, 0, Math.PI * 2);
+      ctx.arc(Math.min(18, (GUN_LENGTH[gun] || 23) * 0.6), 10, 3.2, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.fillStyle = hurt ? "#f8c4a3" : enemy ? "#e4b38b" : "#dde1c3";
     ctx.beginPath();

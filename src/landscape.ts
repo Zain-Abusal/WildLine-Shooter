@@ -133,6 +133,8 @@ export class PropSprites {
   readonly cacti: HTMLCanvasElement[];
   /** Structures by biome: forest cabin, snow lodge, desert adobe. Anchor (100, 118). */
   readonly houses: HTMLCanvasElement[];
+  /** Rocks: [biome * 2 + variant] (forest grey, snow-capped, desert sandstone). Anchor (36, 38). */
+  readonly rocks: HTMLCanvasElement[];
   constructor(
     drawTree: (
       c: CanvasRenderingContext2D,
@@ -161,6 +163,13 @@ export class PropSprites {
       canvas.width = 128;
       canvas.height = 144;
       drawCactus(canvas.getContext("2d")!, 64, 124, n);
+      return canvas;
+    });
+    this.rocks = Array.from({ length: 6 }, (_, n) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 72;
+      canvas.height = 64;
+      drawRockVariant(canvas.getContext("2d")!, 36, 38, Math.floor(n / 2), n % 2);
       return canvas;
     });
     this.houses = Array.from({ length: 3 }, (_, biome) => {
@@ -283,4 +292,66 @@ function drawHouse(c: CanvasRenderingContext2D, x: number, y: number, biome: num
     c.fillStyle = "#6d6d6a";
     c.fillRect(x + 40, y - 88, 16, 22);
   }
+}
+
+/** Faceted boulder; variant 1 is a lower, wider slab. Biome sets the palette. */
+function drawRockVariant(
+  c: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  biome: number,
+  variant: number,
+) {
+  const dark = biome === 2 ? "#9a6d45" : biome === 1 ? "#6e7f86" : "#63766b",
+    light = biome === 2 ? "#d3a670" : biome === 1 ? "#b9c6cb" : "#9ba68a",
+    mid = biome === 2 ? "#b88956" : biome === 1 ? "#8e9ea4" : "#82937b",
+    w = variant ? 1.25 : 1,
+    h = variant ? 0.75 : 1;
+  c.fillStyle = dark;
+  c.beginPath();
+  c.moveTo(x - 27 * w, y + 7 * h);
+  c.lineTo(x - 23 * w, y - 14 * h);
+  c.lineTo(x - 7 * w, y - 26 * h);
+  c.lineTo(x + 18 * w, y - 20 * h);
+  c.lineTo(x + 27 * w, y + 2 * h);
+  c.lineTo(x + 14 * w, y + 13 * h);
+  c.closePath();
+  c.fill();
+  c.fillStyle = light;
+  c.beginPath();
+  c.moveTo(x - 23 * w, y - 14 * h);
+  c.lineTo(x - 7 * w, y - 26 * h);
+  c.lineTo(x + 18 * w, y - 20 * h);
+  c.lineTo(x + 9 * w, y - 6 * h);
+  c.lineTo(x - 8 * w, y - 2 * h);
+  c.closePath();
+  c.fill();
+  c.fillStyle = mid;
+  c.beginPath();
+  c.moveTo(x - 23 * w, y - 14 * h);
+  c.lineTo(x - 8 * w, y - 2 * h);
+  c.lineTo(x - 3 * w, y + 12 * h);
+  c.lineTo(x - 27 * w, y + 7 * h);
+  c.closePath();
+  c.fill();
+  if (biome === 1) {
+    // Snow cap.
+    c.fillStyle = "#f4f8f8";
+    c.beginPath();
+    c.moveTo(x - 20 * w, y - 15 * h);
+    c.lineTo(x - 7 * w, y - 25 * h);
+    c.lineTo(x + 15 * w, y - 19 * h);
+    c.lineTo(x + 6 * w, y - 12 * h);
+    c.lineTo(x - 6 * w, y - 10 * h);
+    c.closePath();
+    c.fill();
+  }
+  // Crack detail.
+  c.strokeStyle = "#00000022";
+  c.lineWidth = 1.5;
+  c.beginPath();
+  c.moveTo(x + 2 * w, y - 22 * h);
+  c.lineTo(x - 1 * w, y - 10 * h);
+  c.lineTo(x + 5 * w, y - 2 * h);
+  c.stroke();
 }

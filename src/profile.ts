@@ -7,6 +7,11 @@ export const SKINS = [
   { name: "ORCHID", color: "#bb9cd9", cost: 225 },
   { name: "MOSS", color: "#86a56a", cost: 275 },
   { name: "SUNSET", color: "#e4be67", cost: 275 },
+  { name: "CRIMSON", color: "#d9534f", cost: 350 },
+  { name: "ARCTIC", color: "#cfeaf5", cost: 400 },
+  { name: "JUNGLE", color: "#4f8a4a", cost: 400 },
+  { name: "NEON", color: "#39ff88", cost: 500 },
+  { name: "SHADOW", color: "#3b3f52", cost: 600 },
 ] as const;
 export const SKIN_ASSETS = [
   "ranger",
@@ -16,6 +21,11 @@ export const SKIN_ASSETS = [
   "orchid",
   "moss",
   "sunset",
+  "crimson",
+  "arctic",
+  "jungle",
+  "neon",
+  "shadow",
 ];
 /** Cosmetic kill effects (shown on your eliminations) and victory dances (played when you win). */
 export const KILL_EFFECTS = [
@@ -24,6 +34,9 @@ export const KILL_EFFECTS = [
   { name: "EMBER BLAZE", color: "#ff8a3d", cost: 250, asset: "fx-ember" },
   { name: "NEON PULSE", color: "#ff5ce1", cost: 300, asset: "fx-neon" },
   { name: "VOID RIFT", color: "#a07bff", cost: 400, asset: "fx-void" },
+  { name: "LIGHTNING STRIKE", color: "#fff35c", cost: 350, asset: "fx-lightning" },
+  { name: "CONFETTI POP", color: "#ff7eb6", cost: 450, asset: "fx-confetti" },
+  { name: "TOXIC BURST", color: "#9dff3c", cost: 500, asset: "fx-toxic" },
 ] as const;
 export const DANCES = [
   { name: "VICTORY SPIN", cost: 0, asset: "dance-spin" },
@@ -31,6 +44,9 @@ export const DANCES = [
   { name: "AXE SALUTE", cost: 250, asset: "dance-salute" },
   { name: "SIDE SHUFFLE", cost: 300, asset: "dance-shuffle" },
   { name: "BREAKDOWN", cost: 450, asset: "dance-breakdown" },
+  { name: "ROBOT", cost: 300, asset: "dance-robot" },
+  { name: "MOONWALK", cost: 350, asset: "dance-moonwalk" },
+  { name: "WINDMILL", cost: 500, asset: "dance-windmill" },
 ] as const;
 /** Matchmaking brackets by games played on this device. */
 export const TIERS = ["ROOKIE", "REGULAR", "VETERAN", "ELITE"] as const;

@@ -416,8 +416,6 @@ export class Multiplayer {
           );
           p.angle = finiteValue(p.angle, 0, -1e8, 1e8);
           total++;
-          if (p.bot) this.botCount++;
-          else this.humanCount++;
           if (p.id === this.id) {
             const respawn = this.health === 0 && p.health > 0;
             this.serverX = p.x;
@@ -499,6 +497,14 @@ export class Multiplayer {
         }
         for (let k = 0; k < MAX_PARTICIPANTS; k++)
           if (this.peers.active[k] && !this.seen[k]) this.peers.release(k);
+        // Count from stored slots: the bot flag arrives only in full snapshots.
+        this.humanCount = 1;
+        this.botCount = 0;
+        for (let k = 0; k < MAX_PARTICIPANTS; k++)
+          if (this.peers.active[k]) {
+            if (this.bots[k]) this.botCount++;
+            else this.humanCount++;
+          }
         this.onStatus(
           (this.public ? "PUBLIC" : "PARTY") + " · " + total + "/30 PLAYERS",
         );
@@ -609,6 +615,7 @@ export class Multiplayer {
   generation = 0;
   disconnect(notify = true): void {
     this.generation++;
+    this.localHost = false;
     this.migrating = false;
     this.backup = null;
     clearTimeout(this.joinTimer);
@@ -658,6 +665,13 @@ export class Multiplayer {
   }
   attack(angle: number, weapon: number): void {
     this.send(2, angle, weapon);
+  }
+  /** True while this browser hosts the room (its Worker runs the authority). */
+  localHost = false;
+  /** Developer tools for the hosting browser's own player (authority-validated). */
+  admin(message: Record<string, unknown>): void {
+    if (this.localHost && this.socket?.readyState === 1)
+      this.socket.send(JSON.stringify({ t: "admin", ...message }));
   }
   /** auto: periodic touch collection (caches/medkits only, never guns). */
   collect(auto = false): void {

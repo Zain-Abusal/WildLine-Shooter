@@ -211,7 +211,8 @@ test("server bots fight opponents and support teammates without friendly fire", 
     enemy.x = 60;
     enemy.y = 0;
     ally.lastShot = enemy.lastShot = 0;
-    await delay(250);
+    // Bots have a short reaction time before firing at a newly spotted target.
+    await delay(1300);
     assert.ok(enemy.health < 100, "teammate bot attacks opponent");
     assert.ok(human.health < 100, "enemy bot attacks human");
   } finally {
@@ -789,6 +790,43 @@ test("authority allows sprint speed only while stamina lasts", async () => {
     send(a.ws, 1, 36, 0, 0);
     await delay(20);
     assert.equal(p.x, 18, "sprint step rejected when exhausted");
+  } finally {
+    await server.close();
+  }
+});
+
+test("bot AI retreats from the storm edge and seeks medkits when hurt", async () => {
+  const server = createGameServer(0, "127.0.0.1");
+  await once(server.http, "listening");
+  const url =
+    "ws://127.0.0.1:" + (server.http.address() as { port: number }).port;
+  try {
+    const client = await join(url, "AIBOT");
+    const room = server.rooms.get("AIBOT")!,
+      human = room.players.get(client.welcome.id)!;
+    if (!room.startedAt) room.startedAt = Date.now() - 1000;
+    for (const bot of room.bots) {
+      bot.x = 50000;
+      bot.y = 50000;
+    }
+    const [edgeBot, hurtBot] = room.bots.filter((b) => b.active && b.team === human.team);
+    // Storm edge: an ally (no target) just inside the zone heads inward.
+    human.x = room.radius - 300;
+    human.y = 0;
+    edgeBot.x = room.radius - 60;
+    edgeBot.y = 0;
+    hurtBot.x = room.radius - 700;
+    hurtBot.y = 300;
+    hurtBot.health = 20;
+    room.loots.push({ id: 999, x: room.radius - 700, y: 650, weapon: 0, ammo: 0, gun: false, heal: 25 });
+    const edgeStart = Math.hypot(edgeBot.x, edgeBot.y),
+      medStart = Math.hypot(hurtBot.x - (room.radius - 700), hurtBot.y - 650);
+    await delay(700);
+    assert.ok(Math.hypot(edgeBot.x, edgeBot.y) < edgeStart - 20, "moves away from the storm edge");
+    const medNow = room.loots.some((l) => l.id === 999)
+      ? Math.hypot(hurtBot.x - (room.radius - 700), hurtBot.y - 650)
+      : 0;
+    assert.ok(medNow < medStart - 20 || hurtBot.health > 20, "hurt bot goes for the medkit");
   } finally {
     await server.close();
   }

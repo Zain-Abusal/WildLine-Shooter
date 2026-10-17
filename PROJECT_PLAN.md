@@ -177,3 +177,15 @@ Verified: npm test (42/42), npm run build, test:browser, test:scenarios, test:pr
 - [ ] Physical-device playtests (iPad Safari, phones, low-end laptops) and real-network multiplayer at scale.
 
 Verified: npm test, build, test:browser, test:scenarios, test:production and test:p2p pass; six-viewport HUD audit clean with the tutorial visible.
+
+## Admin fix, smarter bots, villages, models and more items — 2026-10-17
+
+- [x] Fixed god-mode teleport/invulnerability/ammo/speed/range online: authority admin channel for the hosting browser (never vs real players in public); fixed localHost flag reset and human/bot counting with compact snapshots.
+- [x] Fixed finale overlay appearing outside a match.
+- [x] Bot AI: weapon-aware spacing, strafing, reaction time, distance-scaled aim, medkit seeking, storm retreat (server and offline).
+- [x] Map: villages (settlement noise, up to two buildings per chunk), rocky mountains, biome rock variants.
+- [x] Models: character outline, team armband and hands on weapons.
+- [x] Shop: +5 outfits, +3 kill effects (lightning, confetti, toxic), +3 dances (robot, moonwalk, windmill).
+- [x] Measured client cost: ~0.16 ms update, ~1 ms render script per frame at 60 FPS (browser raster dominates).
+
+Verified: npm test (45/45), build, test:browser, test:scenarios, test:production and test:p2p pass.

@@ -97,8 +97,8 @@ export function terrainIndex(seed: number, x: number, y: number, h: number) {
 export const STRUCTURE = 5;
 /**
  * True when a spawn point is in water or inside/against a structure.
- * Structures sit at least 140 units inside their chunk, so only the point's own
- * chunk needs checking; `scratch` is regenerated for it.
+ * Structures (slots 0 and 3) sit at least 140 units inside their chunk, so only
+ * the point's own chunk needs checking; `scratch` is regenerated for it.
  */
 export function blockedSpot(
   seed: number,
@@ -110,10 +110,13 @@ export function blockedSpot(
 ): boolean {
   if (terrainHeight(seed, x, y, relief) < -0.24) return true;
   scratch.generate(seed, Math.floor(x / CHUNK), Math.floor(y / CHUNK), relief, density);
-  return (
-    scratch.kind[0] === STRUCTURE &&
-    Math.hypot(x - scratch.ox[0], y - scratch.oy[0]) < STRUCTURE_RADIUS + 45
-  );
+  for (const slot of [0, 3])
+    if (
+      scratch.kind[slot] === STRUCTURE &&
+      Math.hypot(x - scratch.ox[slot], y - scratch.oy[slot]) < STRUCTURE_RADIUS + 45
+    )
+      return true;
+  return false;
 }
 /** Rare ground medkit, collected like a cache. */
 export const MEDKIT = 6;
@@ -185,28 +188,47 @@ export class Chunk {
       const ground = terrainHeight(seed, this.ox[i], this.oy[i], relief);
       if (ground < -0.24) this.hp[i] = 0;
       else if (ground < -0.12 && this.kind[i] === 0) this.kind[i] = 4;
+      // Mountains: high ground is rocky; most trees and bushes give way to boulders.
+      else if (
+        ground > 0.45 &&
+        (this.kind[i] === 0 || this.kind[i] === 4) &&
+        hash(seed + i * 61 + 13, x, y) < 0.65
+      )
+        this.kind[i] = 1;
     }
     this.chest.fill(0);
-    // At most one structure per chunk, on dry, fairly flat ground away from spawn.
-    if (hash(seed + 5003, x, y) < 0.16) {
-      const sx = x * CHUNK + 140 + hash(seed + 5011, x, y) * (CHUNK - 280),
-        sy = y * CHUNK + 140 + hash(seed + 5021, x, y) * (CHUNK - 280),
+    // Buildings: rare in the wild, clustered into villages where a large-scale
+    // "settlement" noise field is high (up to two per chunk, opposite corners).
+    const town = simplex(seed + 23, (x * CHUNK) / 3600, (y * CHUNK) / 3600),
+      houses = town > 0.42 ? 2 : hash(seed + 5003, x, y) < 0.16 ? 1 : 0,
+      placed = [-1, -1];
+    for (let h = 0; h < houses; h++) {
+      const slot = h === 0 ? 0 : 3,
+        base = houses === 2 ? (h === 0 ? 140 : CHUNK - 200) : 140,
+        span = houses === 2 ? 60 : CHUNK - 280,
+        sx = x * CHUNK + base + hash(seed + 5011 + h * 7, x, y) * span,
+        sy = y * CHUNK + base + hash(seed + 5021 + h * 7, x, y) * span,
         ground = terrainHeight(seed, sx, sy, relief);
-      if (ground > -0.1 && ground < 0.4 && Math.hypot(sx, sy) > 450) {
-        for (let i = 2; i < OBJECTS; i++)
-          if (Math.hypot(this.ox[i] - sx, this.oy[i] - sy) < STRUCTURE_RADIUS + 60)
-            this.hp[i] = 0;
-        this.kind[0] = STRUCTURE;
-        this.ox[0] = sx;
-        this.oy[0] = sy;
-        this.hp[0] = 1;
-        this.biome[0] = biomeAt(seed, sx, sy);
-        // A cache on the doorstep (always a chest in battle royale).
-        this.kind[1] = 2;
-        this.ox[1] = sx;
-        this.oy[1] = sy + STRUCTURE_RADIUS + 22;
-        this.hp[1] = 1;
-        this.chest[1] = 1;
+      if (ground <= -0.1 || ground >= 0.4 || Math.hypot(sx, sy) <= 450) continue;
+      this.kind[slot] = STRUCTURE;
+      this.ox[slot] = sx;
+      this.oy[slot] = sy;
+      this.hp[slot] = 1;
+      this.biome[slot] = biomeAt(seed, sx, sy);
+      // A cache on the doorstep (always a chest in battle royale).
+      this.kind[slot + 1] = 2;
+      this.ox[slot + 1] = sx;
+      this.oy[slot + 1] = sy + STRUCTURE_RADIUS + 22;
+      this.hp[slot + 1] = 1;
+      this.chest[slot + 1] = 1;
+      placed[h] = slot;
+    }
+    for (const slot of placed) {
+      if (slot < 0) continue;
+      for (let i = 0; i < OBJECTS; i++) {
+        if (placed.includes(i) || placed.includes(i - 1)) continue;
+        if (Math.hypot(this.ox[i] - this.ox[slot], this.oy[i] - this.oy[slot]) < STRUCTURE_RADIUS + 60)
+          this.hp[i] = 0;
       }
     }
     // Final surface pass (covers relocated structure caches): nothing in water.

@@ -395,22 +395,30 @@ try {
     e.profile.save();
   });
   await page.locator("#shop-open").click();
+  // Cards below the fold lazy-load; the first row must render and every asset must exist.
   await page.waitForFunction(() => {
     const images = Array.from(document.querySelectorAll("#shop-items img"));
     return (
-      images.length === 20 &&
-      images.every((img) => img.complete && img.naturalWidth > 0)
+      images.length === 31 &&
+      images.slice(0, 3).every((img) => img.complete && img.naturalWidth > 0)
     );
   });
+  const missing = await page.evaluate(async () => {
+    const srcs = Array.from(document.querySelectorAll("#shop-items img"), (img) => img.src);
+    const bad = [];
+    for (const src of srcs) if (!(await fetch(src)).ok) bad.push(src);
+    return bad;
+  });
+  assert.deepEqual(missing, [], "every shop preview exists");
   // The shop sells only unowned items; counts match what is listed.
-  assert.equal(await page.locator("#shop-count").textContent(), "20");
-  assert.equal(await page.locator("#shop-count-effects").textContent(), "4");
-  assert.equal(await page.locator("#shop-count-dances").textContent(), "4");
+  assert.equal(await page.locator("#shop-count").textContent(), "31");
+  assert.equal(await page.locator("#shop-count-effects").textContent(), "7");
+  assert.equal(await page.locator("#shop-count-dances").textContent(), "7");
   await page.locator('[data-shop-filter="weapons"]').click();
   assert.equal(await page.locator("#shop-items .shop-item").count(), 6);
   assert.equal(await page.locator("#shop-count-weapons").textContent(), "6");
   await page.locator('[data-shop-filter="outfits"]').click();
-  assert.equal(await page.locator("#shop-items .shop-item").count(), 6);
+  assert.equal(await page.locator("#shop-items .shop-item").count(), 11);
   await page.locator('[data-shop-filter="all"]').click();
 
   await page
@@ -451,7 +459,7 @@ try {
   assert.equal(await page.locator("#shop-count").textContent(), "6");
   await page.locator("#shop-close").click();
   await page.locator("#shop-open").click();
-  assert.equal(await page.locator("#shop-items .shop-item").count(), 18);
+  assert.equal(await page.locator("#shop-items .shop-item").count(), 29);
   assert.equal(
     await page.locator(".shop-row").filter({ hasText: "BREACH SHOTGUN" }).count(),
     0,

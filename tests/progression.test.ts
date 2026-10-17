@@ -81,7 +81,7 @@ test("new guns and outfits can be unlocked, equipped and restored", () => {
   assert.equal(restored.skin, 4);
   assert.equal(restored.coins, 550);
   assert.equal(restored.buyWeapon(8), false);
-  assert.equal(restored.buySkin(7), false);
+  assert.equal(restored.buySkin(99), false, "unknown outfit ids are rejected");
 });
 
 test("games played drive the matchmaking bracket and persist", () => {
