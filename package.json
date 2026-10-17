@@ -12,7 +12,8 @@
     "multiplayer": "tsx server/index.ts",
     "test:production": "node tests/production.mjs",
     "test:scenarios": "tsx tests/scenarios.mjs",
-    "test:p2p": "tsx tests/p2p.mjs"
+    "test:p2p": "tsx tests/p2p.mjs",
+    "bench": "tsx tests/bench.mts"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

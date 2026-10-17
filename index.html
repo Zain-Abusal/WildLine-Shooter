@@ -183,6 +183,18 @@
       </form>
       <span class="seed-status" id="elevation">ELEV 0 m</span>
     </div>
+    <div id="tutorial" role="dialog" aria-live="polite" aria-label="Tutorial" hidden>
+      <div class="tutorial-head">
+        <span id="tutorial-step">1 / 6</span>
+        <button id="tutorial-skip" type="button">SKIP TUTORIAL</button>
+      </div>
+      <h3 id="tutorial-title"></h3>
+      <p id="tutorial-text"></p>
+      <div class="tutorial-foot">
+        <span id="tutorial-check"></span>
+        <button id="tutorial-next" type="button">NEXT ›</button>
+      </div>
+    </div>
     <div id="spectate-bar" role="status" hidden>
       <button id="spectate-prev" aria-label="Previous player">◀</button>
       <div>
@@ -216,6 +228,23 @@
         <div class="start-hint">
           30 combatants · Team battles · Bots keep the action going.
         </div>
+        <div class="callsign-row">
+          <span>PLAYING AS <b id="start-callsign">—</b></span>
+          <button id="edit-callsign" type="button" aria-label="Change callsign">
+            CHANGE ✎
+          </button>
+        </div>
+        <form id="callsign-form" hidden>
+          <label for="callsign-edit">CALLSIGN</label>
+          <input
+            id="callsign-edit"
+            maxlength="16"
+            autocomplete="nickname"
+            spellcheck="false"
+          /><button type="submit">SAVE</button
+          ><button id="callsign-cancel" type="button">CANCEL</button>
+          <small id="callsign-status" role="status"></small>
+        </form>
       </div>
     </div>
     <a id="credits-link" href="/about.html" target="_blank" rel="noopener"
@@ -544,7 +573,8 @@
         <p id="pause-copy">Your wilderness will be right here.</p>
         <button id="resume">BACK TO THE FIELD ↗</button
         ><button id="restart">RESTART EXPEDITION</button
-        ><button id="back-to-lobby">BACK TO START</button>
+        ><button id="back-to-lobby">BACK TO START</button
+        ><button id="replay-tutorial" type="button">REPLAY TUTORIAL</button>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

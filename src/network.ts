@@ -130,7 +130,7 @@ export class Multiplayer {
   onStatus: (text: string) => void = () => {};
   onPosition: (x: number, y: number) => void = () => {};
   onLeave: () => void = () => {};
-  onHit: () => void = () => {};
+  onHit: (x: number, y: number, damage: number) => void = () => {};
   onKill: (count: number) => void = () => {};
   onResult: (result: string) => void = () => {};
   /** Peers on the local side; solo modes have no allies. */
@@ -374,7 +374,8 @@ export class Multiplayer {
           30,
         );
         if (Number.isInteger(data.hostId)) this.host = data.hostId === this.id;
-        this.loot.clear();
+        // Loot is only sent when it changes.
+        if (Array.isArray(data.loots)) this.loot.clear();
         for (const item of Array.isArray(data.loots)
           ? data.loots.slice(0, 96)
           : []) {
@@ -461,7 +462,8 @@ export class Multiplayer {
               n = k;
               break;
             }
-          if (n < 0)
+          let fresh = false;
+          if (n < 0) {
             n = this.peers.spawn(
               p.x,
               p.y,
@@ -469,20 +471,25 @@ export class Multiplayer {
               0,
               p.ready === false ? 0 : p.health,
             );
+            fresh = true;
+          }
           if (n >= 0) {
             this.seen[n] = 1;
             this.ids[n] = p.id;
-            this.names[n] =
-              typeof p.name === "string" ? p.name.slice(0, 32) : "Player";
-            this.teams[n] = p.team === 1 ? 1 : 0;
-            this.outfits[n] =
-              Number.isInteger(p.skin) && p.skin >= 0 && p.skin < SKINS.length
-                ? p.skin
-                : 0;
+            // Static fields (name/team/outfit/bot) arrive about once a second;
+            // keep the previous values in between.
+            if (typeof p.name === "string") this.names[n] = p.name.slice(0, 32);
+            else if (fresh) this.names[n] = "Player";
+            if (p.team !== undefined || fresh) this.teams[n] = p.team === 1 ? 1 : 0;
+            if (p.skin !== undefined || fresh)
+              this.outfits[n] =
+                Number.isInteger(p.skin) && p.skin >= 0 && p.skin < SKINS.length
+                  ? p.skin
+                  : 0;
             this.weapons[n] =
               validWeapon(p.weapon) || p.weapon === UNARMED ? p.weapon : 0;
             this.concealed[n] = p.hidden ? 1 : 0;
-            this.bots[n] = p.bot ? 1 : 0;
+            if (p.bot !== undefined || fresh) this.bots[n] = p.bot ? 1 : 0;
             this.scores[n] = Math.floor(finiteValue(p.kills, 0, 0, 65535));
             this.targetsX[n] = p.x;
             this.targetsY[n] = p.y;
@@ -528,7 +535,12 @@ export class Multiplayer {
           finiteValue(data.y, NaN, -1e8, 1e8),
         );
       }
-      if (data.t === "hit") this.onHit();
+      if (data.t === "hit")
+        this.onHit(
+          finiteValue(data.x, NaN, -1e8, 1e8),
+          finiteValue(data.y, NaN, -1e8, 1e8),
+          finiteValue(data.d, 0, 0, 200),
+        );
       // Successor only: latest authority state for host migration.
       if (data.t === "backup" && data.state && typeof data.state === "object") {
         this.backup = data.state;

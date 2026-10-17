@@ -13,7 +13,7 @@ const MODES = ["teams", "br", "ffa", "ctf"];
 const validMode = (value: unknown): string =>
   typeof value === "string" && MODES.includes(value) ? value : "teams";
 
-export const ROOM_TTL = 25;
+export const ROOM_TTL = 40;
 export const SDP_TTL = 60;
 export const MAX_SDP = 20000;
 const CODE = /^[-\w]{1,24}$/;

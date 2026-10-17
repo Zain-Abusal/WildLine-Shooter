@@ -165,3 +165,15 @@ Verified: npm test (39/39), npm run build, test:browser, test:scenarios, test:pr
 - [ ] Real cross-network migration testing (different networks/NATs) and physical devices.
 
 Verified: npm test (42/42), npm run build, test:browser, test:scenarios, test:production and test:p2p (including a real host-tab-close migration with a third player) pass.
+
+## Dev tools, onboarding, feel and scale — 2026-10-17
+
+- [x] Fixed: Party → Find Public Match left the start screen over a live match with a half-streamed world.
+- [x] Dev mode BOT/HUMAN tags; ?god-mode=zrax developer tools behind L + hashed password (ESP, aim assist, invulnerable, infinite ammo/range, speed, teleports; public matches disabled, private parties ESP/aim only).
+- [x] Interactive skippable first-run tutorial (device-aware), replay from pause; start-screen callsign editor.
+- [x] Points convert to coins at round end; kills worth 10 points.
+- [x] Recoil, tracer glow, walk animation, hit flash, floating damage numbers (online via authority hit payload).
+- [x] Compact snapshots (−54% bandwidth), authority chunk cache (−60% CPU per match), signaling stops for closed public matches; `npm run bench` capacity measurements.
+- [ ] Physical-device playtests (iPad Safari, phones, low-end laptops) and real-network multiplayer at scale.
+
+Verified: npm test, build, test:browser, test:scenarios, test:production and test:p2p pass; six-viewport HUD audit clean with the tutorial visible.

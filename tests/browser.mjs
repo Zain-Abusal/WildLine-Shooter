@@ -347,7 +347,11 @@ try {
     const n = (await import("/src/main.ts")).engine.network;
     return n.public && n.humanCount === 2 && n.botCount === 28;
   });
+  // Party → Find Public Match drops straight into the game.
+  await waitAsync(guest, async () => (await import("/src/main.ts")).engine.started);
+  assert.ok(await guest.locator("#party-screen").isHidden());
   await guest.screenshot({ path: "artifacts/party-public.png" });
+  await guest.getByRole("button", { name: "PARTY ONLINE", exact: true }).click();
   await guest.locator("#leave-party").click();
   await guest.keyboard.press("Escape");
   assert.ok(await guest.locator("#party-screen").isHidden());

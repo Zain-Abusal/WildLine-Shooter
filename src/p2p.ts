@@ -283,6 +283,7 @@ export class HostSession {
     ).join(""),
   ) {}
   private lastOffer = 0;
+  private listed = true;
   /**
    * Reserve the code and start serving. Throws SignalError (409 when taken).
    * restore: a migration backup (plus this client's map edits) to continue a match.
@@ -313,9 +314,22 @@ export class HostSession {
     this.lastOffer = Date.now();
     this.timer = setInterval(() => {
       tick++;
+      const recent = Date.now() - this.lastOffer < 60000;
+      // Closed to joins (public match under way) and quiet for a minute: stop
+      // polling and unlist, so a running public match costs no signaling at all.
+      if (!this.joinable && !recent) {
+        if (this.listed) {
+          this.listed = false;
+          void signal({ action: "close", code: this.code, token: this.token }).catch(() => {});
+        }
+        return;
+      }
       // Poll quickly while players are arriving, then back off to save Redis commands.
-      if (Date.now() - this.lastOffer < 60000 || tick % 3 === 0) void this.acceptOffers();
-      if (tick % 8 === 0) void this.refresh();
+      if (recent || tick % 3 === 0) void this.acceptOffers();
+      if (tick % 12 === 0 || !this.listed) {
+        this.listed = true;
+        void this.refresh();
+      }
     }, 1250);
   }
   private post(message: ToWorker) {

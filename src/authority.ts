@@ -14,6 +14,7 @@ import {
   axeReach,
   STORM_START_RADIUS,
   ASSIST_CREDIT_SECONDS,
+  KILL_POINTS,
   UNARMED,
   MEDKIT_HEAL,
   CHEST_MEDKIT_CHANCE,
@@ -103,6 +104,10 @@ type Edit = { x: number; y: number; i: number; hp: number };
 type Flag = { x: number; y: number; carrier: number; home: boolean };
 type Room = {
   name: string;
+  /** Snapshot bookkeeping (compact deltas). */
+  snapshotCount?: number;
+  lastRoster?: number;
+  lastLoots?: string;
   /** Matchmaking bracket of the creating player (public rooms). */
   tier: number;
   mode: GameMode;
@@ -219,10 +224,35 @@ export type AuthorityOptions = {
 export function createAuthority(options: AuthorityOptions = {}) {
   const rooms = new Map<string, Room>(),
     clients = new Set<Player>(),
-    scratch = new Chunk(),
+    // Generated chunks are deterministic and never mutated (edits live in room.edits),
+    // so a fixed cache removes most terrain-noise work from bot/cover checks.
+    chunkCache = Array.from({ length: 2048 }, () => new Chunk()),
+    chunkKeys = new Map<string, number>(),
+    slotKeys: string[] = Array(2048).fill(""),
+    probe = new Chunk(),
     // Players restored from a migration backup, waiting to reclaim their slot.
     pending = new Map<string, { data: Record<string, unknown>; room: Room; until: number }>();
   let backupToken = "";
+  let scratch = chunkCache[0],
+    chunkCursor = 0;
+  function chunkAt(
+    seed: number,
+    cx: number,
+    cy: number,
+    relief: number,
+    density: number,
+  ): Chunk {
+    const key = seed + ":" + cx + ":" + cy + ":" + relief + ":" + density;
+    const hit = chunkKeys.get(key);
+    if (hit !== undefined) return chunkCache[hit];
+    const slot = chunkCursor++ % chunkCache.length,
+      chunk = chunkCache[slot];
+    if (slotKeys[slot]) chunkKeys.delete(slotKeys[slot]);
+    chunk.generate(seed, cx, cy, relief, density);
+    chunkKeys.set(key, slot);
+    slotKeys[slot] = key;
+    return chunk;
+  }
   let serial = 1;
   const send = (p: Player, data: unknown) => {
     if (p.ws.open && p.ws.buffered < 65536)
@@ -264,7 +294,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
             ? Math.sin(brAngle) * brRadius
             : Math.sin(angle) * radius;
       // Never spawn in water or inside a building.
-      if (blockedSpot(seed, x, y, r.relief, r.density, scratch)) continue;
+      if (blockedSpot(seed, x, y, r.relief, r.density, probe)) continue;
       let clear = true;
       for (const other of r.players.values())
         if (
@@ -381,7 +411,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
       );
     for (let y = minY; y <= maxY; y++)
       for (let x = minX; x <= maxX; x++) {
-        scratch.generate(seedHash(room.seed), x, y, room.relief, room.density);
+        scratch = chunkAt(seedHash(room.seed), x, y, room.relief, room.density);
         for (let i = 0; i < scratch.count; i++)
           if (scratch.kind[i] < 2 || scratch.kind[i] === STRUCTURE) {
             const health =
@@ -420,7 +450,13 @@ export function createAuthority(options: AuthorityOptions = {}) {
     if (victim) {
       const target = victim as Actor;
       if (!p.bot) {
-        send(p as Player, { t: "hit" });
+        // Position and damage let the shooter show a floating damage number.
+        send(p as Player, {
+          t: "hit",
+          x: Math.round(target.x),
+          y: Math.round(target.y),
+          d: WEAPONS[weapon].damage,
+        });
         target.lastHitBy = p.id;
         target.lastHitAt = now;
         target.lastHitWeapon = weapon;
@@ -494,7 +530,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
     if (randInt(1000) < MEDKIT_DROP_CHANCE * 1000) drop(0, 26, false, 0, MEDKIT_HEAL);
     if (killer) {
       killer.kills++;
-      killer.supplies += 5;
+      killer.supplies += KILL_POINTS;
     }
     broadcast(room, {
       t: "elimination",
@@ -546,7 +582,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
     if (Date.now() - p.lastShot < 1200) return false;
     const cx = Math.floor(p.x / CHUNK),
       cy = Math.floor(p.y / CHUNK);
-    scratch.generate(seedHash(r.seed), cx, cy, r.relief, r.density);
+    scratch = chunkAt(seedHash(r.seed), cx, cy, r.relief, r.density);
     for (let n = 0; n < scratch.count; n++)
       if (
         (scratch.kind[n] === 0 || scratch.kind[n] === 4) &&
@@ -724,7 +760,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
       cy = Math.floor(p.y / CHUNK);
     for (let y = cy - 1; y <= cy + 1; y++)
       for (let x = cx - 1; x <= cx + 1; x++) {
-        scratch.generate(seedHash(room.seed), x, y, room.relief, room.density);
+        scratch = chunkAt(seedHash(room.seed), x, y, room.relief, room.density);
         for (let i = 0; i < scratch.count; i++)
           if (
             scratch.kind[i] === 2 &&
@@ -925,7 +961,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
     let best = Infinity;
     for (let y = cy - 1; y <= cy + 1; y++)
       for (let x = cx - 1; x <= cx + 1; x++) {
-        scratch.generate(seed, x, y, room.relief, room.density);
+        scratch = chunkAt(seed, x, y, room.relief, room.density);
         for (let i = 0; i < scratch.count; i++)
           if (
             scratch.kind[i] === 2 &&
@@ -1017,7 +1053,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
         d = Math.hypot(dx, dy);
       bot.angle = Math.atan2(dy, dx);
       if (chest && !chase && d < 70) {
-        scratch.generate(seedHash(room.seed), chest.cx, chest.cy, room.relief, room.density);
+        scratch = chunkAt(seedHash(room.seed), chest.cx, chest.cy, room.relief, room.density);
         openCache(room, bot, chest.cx, chest.cy, chest.i);
         bot.chest = undefined;
       }
@@ -1043,7 +1079,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
       // Resolve trunks and rocks near the proposed position; no full-world AI processing.
       const cx = Math.floor(bot.x / CHUNK),
         cy = Math.floor(bot.y / CHUNK);
-      scratch.generate(seedHash(room.seed), cx, cy, room.relief, room.density);
+      scratch = chunkAt(seedHash(room.seed), cx, cy, room.relief, room.density);
       for (let i = 0; i < scratch.count; i++)
         if (
           (scratch.kind[i] < 2 || scratch.kind[i] === STRUCTURE) &&
@@ -1446,25 +1482,43 @@ export function createAuthority(options: AuthorityOptions = {}) {
   }, 100);
   const snapshots = setInterval(() => {
     for (const room of rooms.values()) {
-      const encode = (p: Actor) => ({
-        id: p.id,
-        name: p.name,
-        x: p.x,
-        y: p.y,
-        angle: p.angle,
-        health: p.health,
-        supplies: p.supplies,
-        ready: p.ready,
-        team: p.team,
-        bot: p.bot,
-        skin: p.skin,
-        weapon: p.weapon,
-        magazine: p.magazine,
-        reserve: p.reserve,
-        reloading: Math.max(0, (p.reloading - Date.now()) / 1000),
-        kills: p.kills,
-        hidden: p.hidden,
-      });
+      // Compact snapshot: rounded numbers; private ammo fields only for humans;
+      // static fields once a second or when the roster changes.
+      const roster = room.players.size * 100 + room.bots.filter((b) => b.active).length,
+        count = room.snapshotCount ?? 0,
+        full = count % 20 === 0 || roster !== room.lastRoster;
+      room.snapshotCount = count + 1;
+      room.lastRoster = roster;
+      const encode = (p: Actor) => {
+        const out: Record<string, unknown> = {
+          id: p.id,
+          x: Math.round(p.x),
+          y: Math.round(p.y),
+          angle: Math.round(p.angle * 100) / 100,
+          health: Math.round(p.health * 10) / 10,
+          ready: p.ready,
+          weapon: p.weapon,
+          kills: p.kills,
+          hidden: p.hidden,
+        };
+        if (!p.bot) {
+          out.supplies = p.supplies;
+          out.magazine = p.magazine;
+          out.reserve = p.reserve;
+          out.reloading =
+            Math.round(Math.max(0, (p.reloading - Date.now()) / 1000) * 100) / 100;
+        }
+        if (full) {
+          out.name = p.name;
+          out.team = p.team;
+          out.bot = p.bot;
+          out.skin = p.skin;
+        }
+        return out;
+      };
+      const lootText = JSON.stringify(room.loots),
+        sendLoots = full || lootText !== room.lastLoots;
+      room.lastLoots = lootText;
       broadcast(room, {
         t: "state",
         mode: room.mode,
@@ -1477,7 +1531,7 @@ export function createAuthority(options: AuthorityOptions = {}) {
         elapsed: room.elapsed,
         radius: room.radius,
         winner: room.winner,
-        loots: room.loots,
+        loots: sendLoots ? room.loots : undefined,
         playersLeft:
           [...room.players.values()].filter((p) => p.ready && p.health > 0)
             .length + room.bots.filter((b) => b.active && b.health > 0).length,
@@ -1500,8 +1554,12 @@ export function createAuthority(options: AuthorityOptions = {}) {
   }, 15000);
   /** Portable room state for host migration (map edits travel separately). */
   function serializeRoom(room: Room, now = Date.now()) {
-    const { players, bots, edits, ...rest } = room;
+    // Snapshot bookkeeping is per host and stays out of backups.
+    const { players, bots, edits, snapshotCount, lastRoster, lastLoots, ...rest } = room;
     void edits;
+    void snapshotCount;
+    void lastRoster;
+    void lastLoots;
     return {
       v: 1,
       token: backupToken,

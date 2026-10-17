@@ -28,6 +28,8 @@ import {
   stormDamage,
   axeReach,
   ASSIST_CREDIT_SECONDS,
+  KILL_POINTS,
+  pointCoins,
   STORM_START_RADIUS,
   BR_START_RADIUS,
   BR_HOLD,
@@ -67,6 +69,7 @@ import {
   MODE_LABELS,
 } from "./match";
 import { Sound, Sfx } from "./audio";
+import { GodMode } from "./god";
 import { Input } from "./input";
 import { GroundCache, PropSprites, TERRAIN } from "./landscape";
 const TREE = ["#3e6543", "#345b3c", "#4f7546"];
@@ -82,7 +85,12 @@ class Fighters extends Pool {
   /** Match time of the local player's last hit; drives assist kill credit. */
   hitAt = new Float32Array(this.capacity).fill(-1e9);
   hitWeapon = new Uint8Array(this.capacity);
+  /** Seconds left of walk animation / hit flash (render only). */
+  walk = new Float32Array(this.capacity);
+  flash = new Float32Array(this.capacity);
 }
+/** Damage-number labels precomputed so rendering never formats strings. */
+const DAMAGE_TEXT = Array.from({ length: 201 }, (_, i) => String(i));
 /** Held-gun silhouette per weapon ID: length, thickness and body colour. */
 const GUN_LENGTH = [23, 0, 19, 34, 16, 29, 11, 26];
 const GUN_WIDTH = [6, 0, 8, 5, 7, 5, 5, 7];
@@ -127,6 +135,8 @@ export class GameEngine {
   private previousHealth = 100;
   readonly sound = new Sound();
   private quickPublic = false;
+  /** Set by public matchmaking from the Party menu: enter as soon as connected. */
+  private autoEnter = false;
   private joinedRoom = "";
   private joinedRound = 0;
   private lastPublicRoom = "";
@@ -178,6 +188,27 @@ export class GameEngine {
   private slotIcon = document.createElement("img");
   /** Preallocated chunk for spawn checks (never touches the streamed world slots). */
   private probe = new Chunk();
+  /** First-time tutorial: -1 inactive, else step index; progress anchors. */
+  private tutorialStep = -1;
+  private tutorialX = 0;
+  private tutorialY = 0;
+  private shotsFired = 0;
+  /** Remote hit flashes (detected from health drops) and their last health. */
+  private peerFlash = new Float32Array(30);
+  private peerLife = new Float32Array(30);
+  /** Floating damage numbers: fixed 16-slot pool. */
+  private dnX = new Float64Array(16);
+  private dnY = new Float64Array(16);
+  private dnAge = new Float32Array(16).fill(9);
+  private dnValue = new Uint8Array(16);
+  private dnCursor = 0;
+  /** Weapon kick (camera recoil) remaining. */
+  private recoil = 0;
+  private god: GodMode | null = null;
+  private targetX = 0;
+  private targetY = 0;
+  /** ?dev-mode=true diagnostics (set in main.ts before construction). */
+  private readonly devMode = document.body.classList.contains("dev-mode");
   private campWet = false;
   /** Fixed kill-effect slots: position, age (seconds) and whether it was the player's kill. */
   private fxX = new Float64Array(8);
@@ -251,7 +282,40 @@ export class GameEngine {
       }
     };
     remember();
-    callsign.addEventListener("change", remember);
+    callsign.addEventListener("change", () => {
+      remember();
+      this.showCallsign();
+    });
+    this.showCallsign();
+    // Start-screen callsign editor (same value the Party form uses).
+    const form = $("callsign-form") as HTMLFormElement,
+      field = $("callsign-edit") as HTMLInputElement;
+    $("edit-callsign").addEventListener("click", () => {
+      form.hidden = false;
+      field.value = callsign.value;
+      $("callsign-status").textContent = "";
+      field.focus();
+      field.select();
+    });
+    $("callsign-cancel").addEventListener("click", () => (form.hidden = true));
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const name = field.value.trim().replace(/\s+/g, " ");
+      if (!/^[A-Za-z0-9 _-]{2,16}$/.test(name)) {
+        $("callsign-status").textContent =
+          "Use 2–16 letters, numbers, spaces, _ or -.";
+        return;
+      }
+      callsign.value = name;
+      remember();
+      this.showCallsign();
+      form.hidden = true;
+      this.notify(
+        this.network.connected
+          ? "Callsign saved · used from your next match."
+          : "Callsign saved.",
+      );
+    });
     // Fixed rows: 30 per side (offline practice can field 26 opponents).
     for (let n = 0; n < 60; n++) {
       const row = document.createElement("div");
@@ -312,9 +376,10 @@ export class GameEngine {
       this.addKillMessage(killer, victim, weapon, local);
       if (Number.isFinite(x) && Number.isFinite(y)) this.killEffect(x, y, local);
     };
-    this.network.onHit = () => {
+    this.network.onHit = (x, y, damage) => {
       this.hitMarker = 0.15;
       this.sound.play(Sfx.Hit);
+      if (damage > 0 && Number.isFinite(x)) this.damageNumber(x, y, damage);
     };
     this.network.onKill = (count) => {
       // Respawn modes allow repeat kills of the same bots, so coins per kill are lower.
@@ -332,6 +397,12 @@ export class GameEngine {
       this.notify(ours ? "Flag captured! +1 for your team." : "Your flag was captured.");
     };
     $("finale-screen").addEventListener("click", () => this.advanceFinale(0, true));
+    $("tutorial-next").addEventListener("click", () => this.advanceTutorial());
+    $("tutorial-skip").addEventListener("click", () => this.endTutorial());
+    $("replay-tutorial").addEventListener("click", () => {
+      this.setPaused(false);
+      this.startTutorial();
+    });
     $("spectate-prev").addEventListener("click", () => this.cycleSpectate(-1));
     $("spectate-next").addEventListener("click", () => this.cycleSpectate(1));
     $("spectate-leave").addEventListener("click", () => this.finishMatch(false));
@@ -512,8 +583,13 @@ export class GameEngine {
           ? "New round · Fresh map, loot and combatants."
           : "Party ready. Enter when you are ready; bots fill empty slots.",
       );
-      if (this.quickPublic) {
+      // Keep the streamed world around the new camera even before entering (no blank half-screens).
+      this.world.sync(this.cameraX, this.cameraY, this.viewW, this.viewH);
+      this.renderDirty = true;
+      // Public matches (main button or Party → Find Public Match) drop straight in.
+      if (this.quickPublic || (this.autoEnter && data.public)) {
         this.quickPublic = false;
+        this.autoEnter = false;
         $("party-screen").hidden = true;
         $("matchmaking-screen").hidden = true;
         this.enterGame();
@@ -774,7 +850,14 @@ export class GameEngine {
           push > 0.2 &&
           (!!(i.keys.ShiftLeft || i.keys.ShiftRight) || (i.touch && push > 0.95)),
       );
-    p.update(dt, down ? 0 : i.mx, down ? 0 : i.my, movementSpeed(height) * boost);
+    const god = this.god;
+    if (god?.ammoOn) p.magazine = WEAPONS[p.gun].magazine;
+    p.update(
+      dt,
+      down ? 0 : i.mx,
+      down ? 0 : i.my,
+      movementSpeed(height) * boost * (god?.speedOn ? 1.8 : 1),
+    );
     this.muzzle = Math.max(0, this.muzzle - dt);
     this.hitMarker = Math.max(0, this.hitMarker - dt);
     if (i.pointerAim)
@@ -784,6 +867,8 @@ export class GameEngine {
       );
     else if (Math.hypot(i.ax, i.ay) > 0.15) p.angle = Math.atan2(i.ay, i.ax);
     else if (Math.hypot(i.mx, i.my) > 0.1) p.angle = Math.atan2(i.my, i.mx);
+    if (god?.aimOn && this.nearestHostile(god.rangeOn ? 6000 : WEAPONS[p.gun].range))
+      p.angle = Math.atan2(this.targetY - p.y, this.targetX - p.x);
     // A small aim lead provides right-stick camera control while preserving predictable movement.
     const lead = i.touch && Math.hypot(i.ax, i.ay) > 0.15 ? 80 : 25;
     const ease = 1 - Math.exp(-8 * dt);
@@ -826,6 +911,20 @@ export class GameEngine {
       this.updateAllies(dt);
     }
     this.swing = Math.max(0, this.swing - dt);
+    for (let n = 0; n < this.enemies.capacity; n++) {
+      if (this.enemies.walk[n] > 0) this.enemies.walk[n] -= dt;
+      if (this.enemies.flash[n] > 0) this.enemies.flash[n] -= dt;
+    }
+    for (let n = 0; n < this.allies.capacity; n++) {
+      if (this.allies.walk[n] > 0) this.allies.walk[n] -= dt;
+      if (this.allies.flash[n] > 0) this.allies.flash[n] -= dt;
+    }
+    const peers = this.network.peers;
+    for (let n = 0; n < peers.capacity; n++) {
+      if (peers.active[n] && peers.life[n] < this.peerLife[n] - 3) this.peerFlash[n] = 0.12;
+      this.peerLife[n] = peers.active[n] ? peers.life[n] : 0;
+      if (this.peerFlash[n] > 0) this.peerFlash[n] -= dt;
+    }
     if (i.keys.KeyR) {
       i.keys.KeyR = false;
       this.reload();
@@ -842,6 +941,8 @@ export class GameEngine {
             (this.network.connected && this.network.infiniteAmmo))))
     ) {
       p.cooldown = config.cooldown;
+      this.shotsFired++;
+      if (weapon !== 1) this.recoil = Math.min(1, 0.35 + config.damage / 110);
       this.sound.play(weapon === 1 ? Sfx.Swing : Sfx.Shot, 1, weapon);
       this.muzzle = weapon === 1 ? 0 : 0.075;
       this.revealUntil = this.matchTime + 1.2;
@@ -853,7 +954,7 @@ export class GameEngine {
           p.y + Math.sin(p.angle) * 24,
           Math.cos(p.angle) * config.speed,
           Math.sin(p.angle) * config.speed,
-          Math.max(0, config.range - 24) / config.speed,
+          Math.max(0, (this.god?.rangeOn ? 6000 : config.range) - 24) / config.speed,
           0,
         );
         if (shot >= 0) this.projectiles.kind[shot] = weapon + 3;
@@ -897,6 +998,7 @@ export class GameEngine {
     }
     this.previousHealth = p.health;
     this.toastClock -= dt;
+    if (god?.godOn) p.health = 100;
     if (!this.network.connected) {
       const radius = stormRadius(this.matchTime, this.brMode),
         damage = stormDamage(this.matchTime, this.brMode) * dt;
@@ -1073,6 +1175,7 @@ export class GameEngine {
         if (d > (target >= 0 ? 180 : 55)) {
           a.x[n] += (dx / d) * 180 * dt;
           a.y[n] += (dy / d) * 180 * dt;
+          a.walk[n] = 0.2;
         }
         a.vy[n] = Math.max(0, a.vy[n] - dt);
         if (target >= 0 && a.vy[n] === 0) {
@@ -1125,6 +1228,7 @@ export class GameEngine {
         if (d < 500 && d > 165) {
           e.x[n] += (dx / d) * speed * this.botDifficulty * dt;
           e.y[n] += (dy / d) * speed * this.botDifficulty * dt;
+          e.walk[n] = 0.2;
         }
         for (let k = 0; k < e.capacity; k++)
           if (k !== n && e.active[k]) {
@@ -1224,6 +1328,7 @@ export class GameEngine {
               19
           ) {
             this.allies.life[a] -= 8;
+            this.allies.flash[a] = 0.12;
             if (this.allies.life[a] <= 0) {
               this.allies.release(a);
               if (this.projectileOwner[n] >= 0)
@@ -1236,7 +1341,10 @@ export class GameEngine {
       if (!b.active[n]) continue;
       for (let k = 0; k < e.capacity && b.kind[n] !== 1; k++)
         if (e.active[k] && Math.hypot(b.x[n] - e.x[k], b.y[n] - e.y[k]) < 19) {
-          e.life[k] -= b.kind[n] >= 3 ? WEAPONS[b.kind[n] - 3].damage : 20;
+          const dealt = b.kind[n] >= 3 ? WEAPONS[b.kind[n] - 3].damage : 20;
+          e.life[k] -= dealt;
+          e.flash[k] = 0.12;
+          if (b.kind[n] >= 3) this.damageNumber(e.x[k], e.y[k], dealt);
           if (b.kind[n] >= 3) {
             e.hitAt[k] = this.matchTime;
             e.hitWeapon[k] = b.kind[n] - 3;
@@ -1335,7 +1443,7 @@ export class GameEngine {
     }
     if (credit) {
       this.sound.play(Sfx.Elimination);
-      this.player.supplies += 5;
+      this.player.supplies += KILL_POINTS;
     } else this.addKillMessage(killer, this.enemyNames[n], weapon, false);
     e.release(n);
     if (credit) this.notify("Elimination confirmed · +25 coins, +5 supplies");
@@ -1454,6 +1562,8 @@ export class GameEngine {
       }
     if (enemy >= 0) {
       e.life[enemy] -= WEAPONS[1].damage;
+      e.flash[enemy] = 0.12;
+      this.damageNumber(e.x[enemy], e.y[enemy], WEAPONS[1].damage);
       e.hitAt[enemy] = this.matchTime;
       e.hitWeapon[enemy] = 1;
       this.burst(e.x[enemy], e.y[enemy], 8, 2);
@@ -1592,6 +1702,12 @@ export class GameEngine {
     ctx.translate(this.width / 2, this.height / 2);
     ctx.scale(this.scale, this.scale);
     ctx.translate(-this.cameraX, -this.cameraY);
+    if (this.recoil > 0) {
+      const a = this.player.angle,
+        k = this.recoil * 7;
+      ctx.translate(Math.cos(a) * k, Math.sin(a) * k);
+      this.recoil = Math.max(0, this.recoil - this.frameDt * 9);
+    }
     if (this.shake > 0) {
       const k = this.shake * 40;
       ctx.translate(Math.sin(this.matchTime * 91) * k, Math.cos(this.matchTime * 77) * k);
@@ -1639,11 +1755,12 @@ export class GameEngine {
           e.y[n],
           e.vx[n],
           true,
-          false,
+          e.flash[n] > 0,
           e.kind[n],
           e.skin[n],
           false,
           e.gun[n],
+          e.walk[n] > 0 ? this.matchTime * 11 + n : -1,
         );
       }
     const companions = this.allies;
@@ -1658,11 +1775,12 @@ export class GameEngine {
           companions.y[n],
           companions.vx[n],
           false,
-          false,
+          companions.flash[n] > 0,
           1,
           companions.skin[n],
           false,
           companions.gun[n],
+          companions.walk[n] > 0 ? this.matchTime * 11 + n : -1,
         );
     const remotes = this.network.peers;
     for (let n = 0; n < remotes.capacity; n++)
@@ -1683,11 +1801,16 @@ export class GameEngine {
           remotes.y[n],
           remotes.vx[n],
           !this.network.ally(n),
-          false,
+          this.peerFlash[n] > 0,
           1,
           this.network.outfits[n],
           this.network.weapons[n] === UNARMED,
           this.network.weapons[n],
+          Math.abs(this.network.targetsX[n] - remotes.x[n]) +
+            Math.abs(this.network.targetsY[n] - remotes.y[n]) >
+            2
+            ? this.matchTime * 11 + n
+            : -1,
         );
       }
     const p = this.player;
@@ -1703,6 +1826,7 @@ export class GameEngine {
         -1,
         this.input.weapon === 1 || p.gun === UNARMED,
         p.gun,
+        Math.abs(p.vx) + Math.abs(p.vy) > 40 ? this.matchTime * 11 : -1,
       );
     if (this.swing > 0) {
       ctx.strokeStyle = "#e7f9b1aa";
@@ -1753,6 +1877,8 @@ export class GameEngine {
       }
     }
     this.drawKillEffects(ctx, this.frameDt);
+    this.drawDamageNumbers(ctx, this.frameDt);
+    if (this.god?.espOn) this.drawEsp(ctx);
     this.drawHealthBar(ctx, p.x, p.y, p.health, 100, false);
     for (let n = 0; n < companions.capacity; n++)
       if (
@@ -1773,6 +1899,7 @@ export class GameEngine {
         ctx.fillStyle = "#b2e3ef";
         ctx.fillText(this.allyNames[n], companions.x[n], companions.y[n] - 49);
         ctx.textAlign = "start";
+        if (this.devMode) this.devTag(ctx, companions.x[n], companions.y[n], true);
       }
     for (let n = 0; n < remotes.capacity; n++)
       if (
@@ -1801,9 +1928,10 @@ export class GameEngine {
           this.network.ally(n) ? "#b2e3ef" : "#eec9a8";
         ctx.fillText(this.network.names[n], remotes.x[n], remotes.y[n] - 49);
         ctx.textAlign = "start";
+        if (this.devMode) this.devTag(ctx, remotes.x[n], remotes.y[n], this.network.bots[n] === 1);
       }
     for (let n = 0; n < e.capacity; n++)
-      if (e.active[n] && this.visible(e.x[n], e.y[n], 40))
+      if (e.active[n] && this.visible(e.x[n], e.y[n], 40)) {
         this.drawHealthBar(
           ctx,
           e.x[n],
@@ -1812,6 +1940,8 @@ export class GameEngine {
           e.kind[n] === 0 ? 45 : e.kind[n] === 1 ? 60 : 100,
           true,
         );
+        if (this.devMode) this.devTag(ctx, e.x[n], e.y[n], true);
+      }
     const loot = this.network.connected ? this.network.loot : this.loot;
     for (let n = 0; n < loot.capacity; n++)
       if (loot.active[n] && this.visible(loot.x[n], loot.y[n], 50))
@@ -1836,15 +1966,21 @@ export class GameEngine {
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.stroke();
     const b = this.projectiles;
-    ctx.strokeStyle = "#f7f1ab";
-    ctx.lineWidth = 3;
     ctx.beginPath();
     for (let n = 0; n < b.capacity; n++)
       if (b.active[n] && this.visible(b.x[n], b.y[n], 10)) {
         ctx.moveTo(b.x[n], b.y[n]);
-        ctx.lineTo(b.x[n] - b.vx[n] * 0.014, b.y[n] - b.vy[n] * 0.014);
+        ctx.lineTo(b.x[n] - b.vx[n] * 0.03, b.y[n] - b.vy[n] * 0.03);
       }
+    // Glowing tracer: wide soft pass, then a bright core.
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#ffe27a44";
+    ctx.lineWidth = 7;
     ctx.stroke();
+    ctx.strokeStyle = "#fff6c8";
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    ctx.lineCap = "butt";
     const fx = this.particles;
     for (let n = 0; n < fx.capacity; n++)
       if (fx.active[n] && this.visible(fx.x[n], fx.y[n], 10)) {
@@ -1918,6 +2054,207 @@ export class GameEngine {
       ctx.strokeRect(9, 9, this.width - 18, this.height - 18);
       ctx.restore();
     }
+  }
+  /** Interactive first-run tutorial (also replayable from the pause menu). */
+  private startTutorial(): void {
+    this.tutorialStep = 0;
+    this.tutorialX = this.player.x;
+    this.tutorialY = this.player.y;
+    this.shotsFired = 0;
+    $("tutorial").hidden = false;
+    document.body.classList.add("tutorial-on");
+    this.showTutorialStep();
+  }
+  private endTutorial(): void {
+    this.tutorialStep = -1;
+    $("tutorial").hidden = true;
+    document.body.classList.remove("tutorial-on");
+    try {
+      localStorage.setItem("wildline.tutorial.v1", "done");
+    } catch {
+      // Ignore blocked storage.
+    }
+  }
+  private tutorialSteps(): [string, string][] {
+    const touch = this.input.touch,
+      mode = this.network.connected ? this.network.mode : this.practiceMode;
+    return [
+      [
+        "MOVE",
+        touch
+          ? "Drag the left joystick to move around."
+          : "Move with W A S D or the arrow keys.",
+      ],
+      [
+        "AIM AND SHOOT",
+        touch
+          ? "Aim with the right joystick and hold ATTACK to fire."
+          : "Aim with the mouse and hold left click to fire. R reloads, 1 / 2 swap gun and axe.",
+      ],
+      [
+        "SPRINT",
+        touch
+          ? "Push the move stick all the way to its edge to sprint. The blue bar under health is stamina."
+          : "Hold Shift while moving to sprint. The blue bar under health is stamina.",
+      ],
+      [
+        "LOOT AND POINTS",
+        (touch ? "Tap COLLECT" : "Press E") +
+          " to pick up guns and open " +
+          (mode === "br" ? "chests" : "point gems") +
+          ". Ammo and medkits are picked up automatically. Points turn into coins at the end of the round.",
+      ],
+      [
+        "THE ZONE",
+        "Stay inside the circle. A pulsing purple border means you are in the storm and losing health. Tap MAP to see the zone.",
+      ],
+      [
+        "WIN THE ROUND",
+        mode === "br"
+          ? "Battle Royale: everyone starts with an axe. Loot chests and be the last one standing."
+          : mode === "ffa"
+            ? "Free-for-All: you respawn. First to 15 eliminations wins."
+            : mode === "ctf"
+              ? "Capture the Flag: grab the enemy flag and bring it to your base while your flag is home."
+              : "Team Battle: blue is your team, orange is the enemy. The last team standing wins.",
+      ],
+    ];
+  }
+  private showTutorialStep(): void {
+    const steps = this.tutorialSteps(),
+      [title, text] = steps[this.tutorialStep];
+    $("tutorial-step").textContent = this.tutorialStep + 1 + " / " + steps.length;
+    $("tutorial-title").textContent = title;
+    $("tutorial-text").textContent = text;
+    $("tutorial-check").textContent = this.tutorialStep < 3 ? "Try it now…" : "";
+    $("tutorial-next").textContent =
+      this.tutorialStep === steps.length - 1 ? "LET'S GO ✓" : "NEXT ›";
+  }
+  private advanceTutorial(): void {
+    if (this.tutorialStep < 0) return;
+    if (this.tutorialStep >= this.tutorialSteps().length - 1) {
+      this.endTutorial();
+      return;
+    }
+    this.tutorialStep++;
+    this.tutorialX = this.player.x;
+    this.tutorialY = this.player.y;
+    this.shotsFired = 0;
+    this.showTutorialStep();
+  }
+  /** Throttled HUD work: the first three steps complete when the player does them. */
+  private tutorialTick(): void {
+    const step = this.tutorialStep,
+      p = this.player;
+    if (step < 0 || !this.started || this.paused) return;
+    const done =
+      step === 0
+        ? Math.hypot(p.x - this.tutorialX, p.y - this.tutorialY) > 160
+        : step === 1
+          ? this.shotsFired > 0
+          : step === 2
+            ? p.stamina < 85
+            : false;
+    if (done) {
+      $("tutorial-check").textContent = "✓ Nice!";
+      this.tutorialStep = -2 - step; // brief pause before the next step
+      setTimeout(() => {
+        if (this.tutorialStep === -2 - step) {
+          this.tutorialStep = step;
+          this.advanceTutorial();
+        }
+      }, 700);
+    }
+  }
+  private showCallsign(): void {
+    const name = ($("callsign") as HTMLInputElement).value || "Player";
+    $("start-callsign").textContent = name;
+    $("player-callsign").textContent = name.toUpperCase();
+  }
+  /** Dev tools: closest living opponent within range → targetX/targetY. */
+  private nearestHostile(range: number): boolean {
+    const p = this.player;
+    let best = range;
+    let found = false;
+    if (this.network.connected) {
+      const peers = this.network.peers;
+      for (let n = 0; n < peers.capacity; n++)
+        if (peers.active[n] && peers.life[n] > 0 && !this.network.ally(n)) {
+          const d = Math.hypot(peers.x[n] - p.x, peers.y[n] - p.y);
+          if (d < best) {
+            best = d;
+            this.targetX = peers.x[n];
+            this.targetY = peers.y[n];
+            found = true;
+          }
+        }
+    } else {
+      const e = this.enemies;
+      for (let n = 0; n < e.capacity; n++)
+        if (e.active[n]) {
+          const d = Math.hypot(e.x[n] - p.x, e.y[n] - p.y);
+          if (d < best) {
+            best = d;
+            this.targetX = e.x[n];
+            this.targetY = e.y[n];
+            found = true;
+          }
+        }
+    }
+    return found;
+  }
+  /** Dev tools ESP: box and tracer for every opponent, including hidden ones. */
+  private drawEsp(ctx: CanvasRenderingContext2D): void {
+    ctx.lineWidth = 2;
+    if (this.network.connected) {
+      const peers = this.network.peers;
+      for (let n = 0; n < peers.capacity; n++)
+        if (peers.active[n] && peers.life[n] > 0 && !this.network.ally(n))
+          this.espMark(ctx, peers.x[n], peers.y[n]);
+    } else {
+      const e = this.enemies;
+      for (let n = 0; n < e.capacity; n++)
+        if (e.active[n]) this.espMark(ctx, e.x[n], e.y[n]);
+    }
+  }
+  private espMark(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    const p = this.player;
+    ctx.strokeStyle = "#ff4d6dcc";
+    ctx.strokeRect(x - 22, y - 30, 44, 54);
+    ctx.strokeStyle = "#ff4d6d55";
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  }
+  /** Enable ?god-mode=zrax developer tools (menu behind the L key and a password). */
+  enableGod(): void {
+    const god = (this.god = new GodMode());
+    god.scope = () =>
+      !this.network.connected ? "full" : this.network.public ? "off" : "assist";
+    god.onAction = (action) => {
+      if (god.scope() !== "full" || !this.started) return;
+      const p = this.player;
+      if (action === "tp-center") {
+        p.x = p.y = 0;
+      } else if (this.nearestHostile(1e9)) {
+        p.x = this.targetX + 90;
+        p.y = this.targetY;
+      }
+      p.vx = p.vy = 0;
+      this.cameraX = p.x;
+      this.cameraY = p.y;
+    };
+  }
+  /** Dev mode only: small BOT / HUMAN tag above a combatant. */
+  private devTag(ctx: CanvasRenderingContext2D, x: number, y: number, bot: boolean): void {
+    ctx.fillStyle = bot ? "#5a3a8ccc" : "#1f6b4fcc";
+    ctx.fillRect(x - 21, y - 76, 42, 13);
+    ctx.font = "700 9px monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(bot ? "BOT" : "HUMAN", x, y - 66);
+    ctx.textAlign = "start";
   }
   private drawHealthBar(
     ctx: CanvasRenderingContext2D,
@@ -2023,7 +2360,10 @@ export class GameEngine {
         this.network.connected ? this.network.kills : this.player.kills,
       ),
     );
-    this.profile.reward(won ? 100 : 10, won ? 400 : 50);
+    const points = this.network.connected ? this.network.supplies : this.player.supplies,
+      bonus = pointCoins(points),
+      matchCoins = (won ? 100 : 10) + bonus;
+    this.profile.reward(matchCoins, won ? 400 : 50);
     this.profile.recordGame(won);
     this.profile.save();
     const mode = this.network.connected ? this.network.mode : this.practiceMode;
@@ -2051,7 +2391,11 @@ export class GameEngine {
     $("result-stats").textContent =
       kills +
       " eliminations · " +
-      (won ? 100 : 10) +
+      points +
+      " points (+" +
+      bonus +
+      ") · " +
+      matchCoins +
       " match coins · " +
       this.profile.coins +
       " coins saved";
@@ -2511,6 +2855,13 @@ export class GameEngine {
   }
   private enterGame(): void {
     this.started = true;
+    let seen = "";
+    try {
+      seen = localStorage.getItem("wildline.tutorial.v1") || "";
+    } catch {
+      seen = "done"; // storage blocked: do not nag every round
+    }
+    if (seen !== "done") this.startTutorial();
     $("player-callsign").textContent = (
       ($("callsign") as HTMLInputElement).value || "Player"
     ).toUpperCase();
@@ -2563,6 +2914,7 @@ export class GameEngine {
       $("connection-status").textContent = "Enter a valid party code.";
       return;
     }
+    this.autoEnter = matchmaking;
     // A dedicated ws server is optional; without one, players host in-browser (P2P).
     const endpoint = import.meta.env.VITE_MULTIPLAYER_URL || "";
     if (endpoint) {
@@ -3024,6 +3376,31 @@ export class GameEngine {
     this.drawActor(c, 0, 0, angle, false, false, 1, -1, move === 2, this.player.gun);
     this.swing = swing;
   }
+  private damageNumber(x: number, y: number, damage: number): void {
+    const i = this.dnCursor++ % 16;
+    this.dnX[i] = x + (hash(this.world.seed, this.dnCursor, 7) - 0.5) * 24;
+    this.dnY[i] = y - 30;
+    this.dnAge[i] = 0;
+    this.dnValue[i] = Math.min(200, Math.round(damage));
+  }
+  private drawDamageNumbers(ctx: CanvasRenderingContext2D, dt: number): void {
+    ctx.textAlign = "center";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#10251d";
+    for (let i = 0; i < 16; i++) {
+      const age = (this.dnAge[i] += dt);
+      if (age > 0.8) continue;
+      const big = this.dnValue[i] >= 50;
+      ctx.globalAlpha = 1 - age / 0.8;
+      ctx.font = big ? "900 20px sans-serif" : "800 15px sans-serif";
+      ctx.fillStyle = big ? "#ffd65a" : "#ffffff";
+      const y = this.dnY[i] - age * 50;
+      ctx.strokeText(DAMAGE_TEXT[this.dnValue[i]], this.dnX[i], y);
+      ctx.fillText(DAMAGE_TEXT[this.dnValue[i]], this.dnX[i], y);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "start";
+  }
   private killEffect(x: number, y: number, local: boolean): void {
     const i = this.fxCursor++ % 8;
     this.fxX[i] = x;
@@ -3244,6 +3621,7 @@ export class GameEngine {
     outfit = -1,
     axe = false,
     gun = 0,
+    stride = -1,
   ): void {
     ctx.fillStyle = "#183b3255";
     ctx.beginPath();
@@ -3259,6 +3637,15 @@ export class GameEngine {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle);
+    // Feet swing while walking; a slight body bob sells the step.
+    const swing = stride >= 0 ? Math.sin(stride) * 6 : 0;
+    ctx.fillStyle = "#1f2f29";
+    ctx.fillRect(-5 + swing, -12, 10, 6);
+    ctx.fillRect(-5 - swing, 6, 10, 6);
+    if (stride >= 0) {
+      const bob = 1 + Math.abs(Math.cos(stride)) * 0.04;
+      ctx.scale(bob, bob);
+    }
     ctx.fillStyle =
       outfit >= 0
         ? (SKINS[outfit] ?? SKINS[0]).color
@@ -3309,6 +3696,13 @@ export class GameEngine {
     ctx.beginPath();
     ctx.arc(-2, -1, 8, 1.2, 4.9);
     ctx.fill();
+    if (hurt) {
+      // Hit flash.
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(-12, -13, 26, 26);
+      ctx.globalAlpha = 1;
+    }
     ctx.restore();
   }
   private updateHUD(): void {
@@ -3423,6 +3817,7 @@ export class GameEngine {
               Math.max(0, Math.ceil(stormEnd(this.brMode) - time)) +
               "s";
     this.updateSpectateBar();
+    this.tutorialTick();
     const edge = Math.hypot(p.x, p.y) - radius;
     this.sound.ambient(
       biomeAt(this.world.seed, p.x, p.y),

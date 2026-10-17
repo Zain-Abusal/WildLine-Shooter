@@ -3490,3 +3490,170 @@ body.spectating .help {
     animation: none;
   }
 }
+/* Start-screen callsign */
+.callsign-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  font-size: 13px;
+  letter-spacing: 1px;
+  color: #cfe0b8;
+}
+.callsign-row b {
+  color: #d9f877;
+  letter-spacing: 0.5px;
+}
+.callsign-row button,
+#callsign-form button {
+  min-height: 36px;
+  padding: 0 12px;
+  background: #10271f;
+  color: #eef6dc;
+  border: 1px solid #7d9463;
+  border-radius: 4px;
+  font-weight: 700;
+}
+#callsign-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+#callsign-form[hidden] {
+  display: none;
+}
+#callsign-form label {
+  width: 100%;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: #b8d27c;
+}
+#callsign-form input {
+  flex: 1 1 180px;
+  min-height: 40px;
+  padding: 0 12px;
+  background: #0d2019;
+  color: #fff;
+  border: 1px solid #7d9463;
+  border-radius: 4px;
+  font-size: 16px;
+}
+#callsign-form small {
+  width: 100%;
+  color: #ffb4a3;
+}
+/* First-run tutorial card (non-blocking). */
+#tutorial {
+  position: fixed;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  width: min(420px, calc(100vw - 32px));
+  padding: 14px 16px;
+  background: #10271ff5;
+  border: 1px solid #d9f877;
+  border-radius: 8px;
+  color: #eef6dc;
+  box-shadow: 0 10px 30px #0007;
+}
+#tutorial[hidden] {
+  display: none;
+}
+.tutorial-head,
+.tutorial-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+#tutorial-step,
+#tutorial-check {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: #b8d27c;
+}
+#tutorial h3 {
+  margin: 8px 0 4px;
+  font:
+    700 24px/1.1 "Barlow Condensed",
+    sans-serif;
+  color: #d9f877;
+}
+#tutorial p {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+#tutorial button {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 4px;
+  font-weight: 700;
+  border: 1px solid #7d9463;
+  background: #173426;
+  color: #eef6dc;
+}
+#tutorial-next {
+  background: #d9f877 !important;
+  color: #10251d !important;
+}
+body:not(.playing) #tutorial {
+  display: none;
+}
+@media (max-width: 600px) {
+  #tutorial {
+    top: 190px;
+  }
+}
+/* Tutorial placement per layout; it replaces toasts while visible. */
+body.tutorial-on #toast {
+  display: none;
+}
+@media (max-width: 1100px) {
+  #tutorial {
+    top: 150px;
+  }
+}
+@media (max-width: 600px) and (min-height: 501px) {
+  #tutorial {
+    top: 272px;
+  }
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  #tutorial {
+    top: 118px;
+    left: 160px;
+    transform: none;
+    width: min(330px, calc(100vw - 280px));
+    padding: 10px 12px;
+  }
+  #tutorial h3 {
+    font-size: 18px;
+  }
+  #tutorial p {
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+}
+@media (max-width: 600px) and (min-height: 501px) {
+  #tutorial {
+    top: 268px;
+    padding: 10px 12px;
+  }
+  #tutorial h3 {
+    font-size: 19px;
+    margin: 4px 0 2px;
+  }
+  #tutorial p {
+    font-size: 12.5px;
+    line-height: 1.4;
+    margin-bottom: 6px;
+  }
+  #tutorial button {
+    min-height: 32px;
+  }
+}

@@ -162,6 +162,13 @@ export function stormEnd(br = false): number {
   return br ? BR_END : STORM_END;
 }
 
+/** Points: earned in the round, converted to coins at the end (capped). */
+export const KILL_POINTS = 10;
+export const POINTS_PER_COIN = 4;
+export const MAX_POINT_COINS = 60;
+export function pointCoins(points: number): number {
+  return Math.min(MAX_POINT_COINS, Math.floor(Math.max(0, points) / POINTS_PER_COIN));
+}
 /** Battle royale loot: players start with only the axe and open chests. */
 export const UNARMED = 1;
 /** Medkits restore a fixed number of health points. */

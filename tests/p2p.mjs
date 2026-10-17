@@ -142,9 +142,18 @@ try {
     await engineValue(b, "e.network.room"),
     await engineValue(a, "e.network.room"),
   );
+  // Party → Find Public Match drops straight into the game (no start screen left over).
+  const c = await open();
+  await c.locator("#start-party").click();
+  await c.locator("#choose-join").click();
+  await c.locator("#find-public").click();
+  await until(c, "e.started && e.network.connected && e.network.public", 40000);
+  assert.ok(await c.locator("#start-screen").isHidden(), "start screen closes");
+  assert.ok(await c.locator("#party-screen").isHidden());
+  assert.ok((await engineValue(c, "e.world.activeCount")) > 10, "world streamed around the camera");
   assert.deepEqual(errors, []);
   console.log(
-    "PASS: browser-hosted P2P private party (CTF) join by code, live authority state, host migration on tab close (successor hosts, third player reconnects), public auto-host and matchmaking join.",
+    "PASS: browser-hosted P2P private party (CTF) join by code, live authority state, host migration on tab close (successor hosts, third player reconnects), public auto-host and matchmaking join, Party → Find Public auto-enters.",
   );
 } finally {
   await browser?.close();

@@ -74,6 +74,19 @@ Matches have a hard cap of **30 total participants, humans plus bots**, in two s
 
 The authority validates movement speed (including sprint stamina), firing cooldowns, ammo, weapon masks, hit range, loot and results. Bots run at 10 Hz and state is broadcast at 20 Hz; bot AI processes only actors near humans, and far bots rotate inside the zone instead of dying unseen.
 
+### Capacity (measured)
+
+`npm run bench [matches] [seconds]` runs the real authority with full bot rosters. Measured on this machine:
+
+| Matches in one process | Participants | CPU (one core) | Snapshot rate | Download per player |
+| --- | --- | --- | --- | --- |
+| 1 | 30 | ~2.6% | 20 Hz | ~65 KB/s |
+| 10 | 300 | ~10% | 20 Hz | ~65 KB/s |
+| 50 | 1,500 | ~30% | 20 Hz | ~64 KB/s |
+| 100 | 3,000 | ~32% | ~12 Hz (degrading) | ~41 KB/s |
+
+A match is capped at 30 participants by design. When a browser hosts, it uploads about 65 KB/s per other real player (about 0.6 MB/s with 10 humans), which is why matches cannot hold 100+ players in one room. Total players scale with the number of matches: each browser-hosted match runs on its host's device, and a dedicated server process handles about 50 matches. The limiting factor on free hosting is signaling usage (Redis commands and Function invocations): a public match costs roughly 75 Redis commands in total (it stops polling once closed to joins), each join about 12, and a private match about 1,500 per hour. The Upstash free tier (500K commands a month) therefore suits casual to moderate traffic; thousands of concurrent players need a paid Redis/Function plan.
+
 ### Optional dedicated server
 
 `npm run multiplayer` runs the same authority behind a Node `ws` server, for hosts that are not tied to a player's tab. Set `VITE_MULTIPLAYER_URL=ws://localhost:8787` (or `wss://…` in production) to use it; `Dockerfile` and `render.yaml` package it for a container host. If you see "Port 8787 is already in use", a server is already running (`curl localhost:8787` shows its health), so stop it or choose another `PORT`. The server binds `0.0.0.0`, reads `PORT` (default 8787), permits 64 rooms / 512 connections, and has message-size/rate limits and heartbeat cleanup.
@@ -121,7 +134,11 @@ The world has **biomes**: forest, snowfields (snowy pines, frozen lakes) and des
 
 **Balance**: weapon DPS rises with price/role (see the weapon list above). Bot hits use a capped share of their actual weapon's damage (max 25 online, 22 offline). Free-for-All/CTF respawns get a 2-second spawn shield that ends when you attack. Kills in respawn modes pay 10 coins.
 
-**Feedback**: your eliminations flash, burst into sparks in your equipped kill effect's colour, pop an "ELIMINATED" label and shake the camera slightly. Standing outside the zone pulses a storm-purple border around the screen. When a round ends, wins play your equipped victory dance full-screen, then a top-3 podium appears, then the results screen (SKIP or click to move on). The Shop sells **kill effects** (Gold Burst free, Frost Shatter, Ember Blaze, Neon Pulse, Void Rift) and **victory dances** (Victory Spin free, Hop Party, Axe Salute, Side Shuffle, Breakdown) alongside guns and outfits; equip them from the Locker. Audio uses a fixed Web Audio bank: every gun has its own layered sound (carbine crack, shotgun boom and pellet spread, longshot crack and rolling echo, tight SMG ticks, marksman crack and echo, Sidekick pop and slide click, Vanguard punch and metallic ring), other players' shots fading with distance and panned left/right, reload/pickup/chest/medkit/axe sounds, and ambient wind (stronger in snow and desert), forest birdsong and a storm rumble near the zone edge. The **leaderboard** is horizontal: your team on the left, the enemy team on the right, and the team score (eliminations, or captures in CTF) in the middle; solo modes show ranks with your placement.
+**First time?** A short interactive tutorial (move, shoot, sprint, loot, zone, goal) appears on your first match; SKIP TUTORIAL closes it and the pause menu can replay it. Change your callsign any time from the start screen (**PLAYING AS … CHANGE**).
+
+**Points** come from eliminations (10), point gems, harvesting and flag captures, and turn into coins at the end of the round (1 coin per 4 points, up to 60).
+
+**Feedback**: shots kick the camera according to the weapon and leave glowing tracers, characters walk and flash when hit, and hits pop floating damage numbers. Your eliminations flash, burst into sparks in your equipped kill effect's colour, pop an "ELIMINATED" label and shake the camera slightly. Standing outside the zone pulses a storm-purple border around the screen. When a round ends, wins play your equipped victory dance full-screen, then a top-3 podium appears, then the results screen (SKIP or click to move on). The Shop sells **kill effects** (Gold Burst free, Frost Shatter, Ember Blaze, Neon Pulse, Void Rift) and **victory dances** (Victory Spin free, Hop Party, Axe Salute, Side Shuffle, Breakdown) alongside guns and outfits; equip them from the Locker. Audio uses a fixed Web Audio bank: every gun has its own layered sound (carbine crack, shotgun boom and pellet spread, longshot crack and rolling echo, tight SMG ticks, marksman crack and echo, Sidekick pop and slide click, Vanguard punch and metallic ring), other players' shots fading with distance and panned left/right, reload/pickup/chest/medkit/axe sounds, and ambient wind (stronger in snow and desert), forest birdsong and a storm rumble near the zone edge. The **leaderboard** is horizontal: your team on the left, the enemy team on the right, and the team score (eliminations, or captures in CTF) in the middle; solo modes show ranks with your placement.
 
 ## Credits and interface
 
